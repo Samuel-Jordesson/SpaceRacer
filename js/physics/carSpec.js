@@ -53,6 +53,7 @@ export const FERRARI_296_GT3 = {
   },
 
   engine: {
+    cylinders: 6,
     idleRpm: 1200,
     limiterRpm: 8000,
     inertia: 0.20,
@@ -161,6 +162,7 @@ export const PORSCHE_992_GT3_R = {
   },
 
   engine: {
+    cylinders: 6,
     idleRpm: 1500,
     limiterRpm: 9500,
     inertia: 0.16,            // aspirado de giro alto: volante leve
@@ -204,6 +206,121 @@ export const PORSCHE_992_GT3_R = {
   steering: {
     maxAngleDeg: 22,
     ackermann: 0.45,
+  },
+
+  assists: {
+    abs: true,
+    tc: true,
+    autoGearbox: true,
+  },
+};
+
+// Lamborghini Fenomeno (2026), série limitada de 29 unidades, carro de rua.
+// Dados públicos da Lamborghini: V12 6.5 aspirado com 835 cv a 9.250 rpm e 725 N·m a 6.750 rpm,
+// três motores elétricos (dois no eixo dianteiro e um integrado ao câmbio), 1.080 cv combinados,
+// câmbio de dupla embreagem com 8 marchas, tração integral, 0–100 km/h em 2,4 s, 0–200 km/h em 6,7 s,
+// mais de 350 km/h, 1.690 kg a seco, entre-eixos 2.779 mm, freios carbono-cerâmicos CCM-R Plus
+// (410 mm/10 pistões na frente, 390 mm atrás), pneus Bridgestone Potenza 265/35 R20 e 355/25 R21.
+// A bateria é tratada como sempre disponível.
+export const LAMBORGHINI_FENOMENO = {
+  name: 'Lamborghini Fenomeno',
+
+  mass: 1830,              // 1.690 kg a seco + piloto + combustível
+  inertia: { pitch: 3000, yaw: 3300, roll: 700 },
+  cgHeight: 0.42,
+  frontWeight: 0.44,       // V12 central-traseiro, motores elétricos na frente
+
+  geometry: {
+    wheelbase: 2.779,
+    trackFront: 1.72,
+    trackRear: 1.70,
+    radiusFront: 0.345,
+    radiusRear: 0.356,
+  },
+
+  suspension: {
+    // carro de rua com amortecedores magnetorreológicos: bem mais macio que um GT3
+    front: { k: 90000, bump: 5200, rebound: 7800, arb: 40000, travel: 0.08 },
+    rear: { k: 110000, bump: 6200, rebound: 9300, arb: 28000, travel: 0.08 },
+    bumpStopK: 1.0e6,
+  },
+
+  tire: {
+    // Bridgestone Potenza Race (semi-slick de pista homologado para rua): menos que um slick de corrida
+    mu: 1.45,
+    fz0: 4500,
+    loadSensitivity: -0.10,
+    slipRatioPeak: 0.10,
+    slipAnglePeakDeg: 7.5,
+    C: 1.45,
+    E: 0.05,
+    longScale: 1.05,
+    rollingResistance: 0.012,
+    inertiaFront: 1.30,      // rodas 20"
+    inertiaRear: 1.70,       // rodas 21"
+  },
+
+  brakes: {
+    maxTorqueFront: 4200,    // carbono-cerâmico 410 mm, 10 pistões
+    maxTorqueRear: 2800,
+    handbrakeTorque: 2800,
+    heatCapacity: 2600,
+    ambientTemp: 25,
+    coolingBase: 0.01,
+    coolingPerMs: 0.0012,
+  },
+
+  engine: {
+    cylinders: 12,
+    idleRpm: 1000,
+    limiterRpm: 9500,
+    inertia: 0.25,
+    // V12 aspirado: 725 N·m a 6.750 rpm, 835 cv (614 kW) a 9.250 rpm
+    torqueCurve: [
+      [800, 280], [1500, 360], [2500, 460], [3500, 550], [4500, 620], [5500, 680],
+      [6750, 725], [7500, 715], [8500, 680], [9250, 634], [9700, 520],
+    ],
+    frictionA: 30,
+    frictionB: 0.011,
+    turboLag: 0.05,
+    turboShare: 0,
+    boostRpmStart: 1000,
+    boostRpmFull: 1500,
+    clutchFullRpm: 8000,
+  },
+
+  // sistema híbrido: 835 cv do V12 + elétricos = 1.080 cv combinados
+  electric: {
+    rear: { power: 30000, maxTorque: 150 },                                // no câmbio, ajuda nas baixas
+    front: { powerPerWheel: 38000, maxWheelTorque: 1800, cutoffKmh: 350 },   // e-eixo dianteiro
+  },
+
+  gearbox: {
+    ratios: [3.75, 2.70, 2.06, 1.65, 1.38, 1.20, 1.10, 1.053],
+    reverse: -3.50,
+    finalDrive: 3.40,
+    efficiency: 0.92,
+    shiftTime: 0.05,         // dupla embreagem
+    clutchMaxTorque: 1400,
+  },
+
+  differential: {
+    preload: 80,
+    powerLock: 0.30,
+    coastLock: 0.20,
+    viscous: 300,
+  },
+
+  aero: {
+    rho: 1.225,
+    CdA: 0.78,
+    ClA: 1.10,               // aerodinâmica ativa, bem menos downforce que um GT3
+    frontBalance: 0.42,
+  },
+
+  steering: {
+    maxAngleDeg: 28,
+    ackermann: 0.6,
   },
 
   assists: {

@@ -8,6 +8,7 @@ import { V3, Quat, clamp, sign, table } from './math.js';
 import { TireModel } from './tire.js';
 
 const G = 9.81;
+const R_FWD = (q) => q.toMat3().col(2).scale(-1); // frente do carro no mundo
 const RPM = 60 / (2 * Math.PI); // rad/s → rpm
 
 export class Vehicle {
@@ -34,6 +35,7 @@ export class Vehicle {
       const axleLoad = this.mass * G * (front ? spec.frontWeight : 1 - spec.frontWeight) / 2;
       this.wheels.push({
         id, front, left, driven: !front,
+        motor: front && !!spec.electric?.front, // motor elétrico no eixo dianteiro (híbridos AWD)
         hardpoint: new V3((left ? -1 : 1) * track / 2, radius - h, front ? -this.a : this.b),
         radius,
         susp,
@@ -74,6 +76,8 @@ export class Vehicle {
     this.clutchLocked = false;
     this.clutchTorque = 0;
     this.tcCut = 1;
+    this.tcFront = 1;
+    this.frontMotorTorque = 0;
     this.tcActive = false;
     this.absActive = false;
     this.steerAngle = 0;
@@ -336,10 +340,34 @@ export class Vehicle {
     this.tcActive = this.tcCut < 0.97 && throttle > 0.05;
     throttle *= this.tcCut;
 
+    // --- motores elétricos dianteiros (um por roda, redução fixa, sem câmbio):
+    // torque constante até a potência máxima, depois potência constante; desligam na vel. máx. do e-eixo
+    const ef = spec.electric?.front;
+    this.frontMotorTorque = 0;
+    if (ef && this.gear !== 0) {
+      const pedal = clamp(input.throttle, 0, 1);
+      const fronts = this.wheels.filter((w) => w.motor);
+      let fTarget = 1;
+      if (this.assists.tc) {
+        const k = Math.max(...fronts.map((w) => (w.contact ? w.slipRatio * sign(this.gear) : 0)));
+        const lim = this.tire.kPeak * 1.15;
+        if (k > lim) fTarget = clamp(1 - (k - lim) / (this.tire.kPeak * 0.9), 0, 1);
+      }
+      this.tcFront += (fTarget - this.tcFront) * clamp(dt / (fTarget < this.tcFront ? 0.01 : 0.08), 0, 1);
+      if (this.tcFront < 0.97 && pedal > 0.05) this.tcActive = true;
+      const om = Math.max(1, Math.abs((fronts[0].omega + fronts[1].omega) / 2));
+      const v = Math.abs(this.vel.dot(R_FWD(this.quat)));
+      // e-eixo desacopla perto da vel. máx.; em ré, limita a ~25 km/h
+      const fade = this.gear < 0 ? clamp((25 / 3.6 - v) / 3, 0, 1) : clamp((ef.cutoffKmh / 3.6 - v) / 8, 0, 1);
+      this.frontMotorTorque = sign(this.gear) * pedal * this.tcFront * fade * Math.min(ef.maxWheelTorque, ef.powerPerWheel / om);
+    }
+
     // --- limitador e marcha lenta
     if (rpm > es.limiterRpm) eng.limiter = true;
     else if (rpm < es.limiterRpm - 150) eng.limiter = false;
     if (eng.limiter) throttle = 0;
+    // limitador de ré (~30 km/h)
+    if (this.gear < 0) throttle *= clamp((30 / 3.6 + this.forwardSpeed) / 2, 0, 1);
     if (rpm < es.idleRpm) throttle = Math.max(throttle, clamp((es.idleRpm - rpm) / 100, 0, 1) * 0.5);
     eng.throttle = throttle;
 
@@ -351,6 +379,9 @@ export class Vehicle {
     const full = table(es.torqueCurve, Math.max(rpm, 0));
     const charge = 1 - es.turboShare + es.turboShare * (throttle > 0 ? eng.boost / Math.max(throttle, 1e-3) : 0);
     let Te = throttle * full * Math.min(1, charge) - (1 - throttle) * (es.frictionA + es.frictionB * rpm);
+    // motor elétrico acoplado ao câmbio (híbrido): torque extra no virabrequim, limitado pela potência
+    const er = spec.electric?.rear;
+    if (er) Te += throttle * Math.min(er.maxTorque, er.power / Math.max(eng.omega, 50));
     if (Te > 0) Te *= gb.efficiency;
     eng.torque = Te;
 
@@ -402,6 +433,7 @@ export class Vehicle {
     for (const w of this.wheels) {
       let Text = 0;
       if (w.driven) Text = Tc * g / 2 + (w === wl ? Tlsd : -Tlsd);
+      if (w.motor) Text += this.frontMotorTorque;
       // atrito (freio/rolagem) tratado como atrito seco implícito: trava a roda sem oscilar
       const a = w.inertia + dt * w.kT;
       const free = (w.inertia * w.omega + dt * (Text - w.T0 + w.kT * w.omega)) / a;

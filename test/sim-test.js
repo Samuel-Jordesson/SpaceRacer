@@ -1,6 +1,6 @@
 // Testes da física sem navegador: node test/sim-test.js
 import { Vehicle, FlatGround } from '../js/physics/vehicle.js';
-import { FERRARI_296_GT3, PORSCHE_992_GT3_R } from '../js/physics/carSpec.js';
+import { FERRARI_296_GT3, PORSCHE_992_GT3_R, LAMBORGHINI_FENOMENO } from '../js/physics/carSpec.js';
 
 const DT = 1 / 1000;
 const kmh = (v) => v * 3.6;
@@ -13,8 +13,10 @@ const finite = (car) => [car.pos.x, car.pos.y, car.pos.z, car.vel.x, car.vel.y, 
 
 // faixas esperadas de cada carro (números públicos / típicos de GT3)
 const SUITES = [
-  [FERRARI_296_GT3, { t100: [2.6, 4.2], t200: [7, 12], vmax: [265, 310], brake: [75, 150] }],
-  [PORSCHE_992_GT3_R, { t100: [2.8, 4.3], t200: [7.5, 12.5], vmax: [270, 300], brake: [75, 150] }],
+  [FERRARI_296_GT3, { t100: [2.6, 4.2], t200: [7, 12], vmax: [265, 310], brake: [75, 150], lat: [1.4, 2.6] }],
+  [PORSCHE_992_GT3_R, { t100: [2.8, 4.3], t200: [7.5, 12.5], vmax: [270, 300], brake: [75, 150], lat: [1.4, 2.6] }],
+  // oficial: 0–100 em 2,4 s, 0–200 em 6,7 s, > 350 km/h; pneu de rua = menos g lateral
+  [LAMBORGHINI_FENOMENO, { t100: [2.1, 2.9], t200: [5.9, 7.6], vmax: [345, 365], brake: [90, 175], lat: [1.05, 1.7] }],
 ];
 const inRange = (v, [a, b]) => v !== null && v > a && v < b;
 let SPEC, make;
@@ -86,7 +88,7 @@ for (const target of [80, 160]) {
     if (t > 12) maxLat = Math.max(maxLat, Math.abs(car.accel.x) / 9.81);
     if (!finite(car)) break;
   }
-  check(`g lateral a ${target} km/h`, maxLat > 1.4 && maxLat < 2.6 && finite(car), `${maxLat.toFixed(2)} g`);
+  check(`g lateral a ${target} km/h`, inRange(maxLat, expect.lat) && finite(car), `${maxLat.toFixed(2)} g`);
 }
 
 // 5) Ré

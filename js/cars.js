@@ -2,7 +2,7 @@
 // e o bloco `visual`, que diz ao carregador quais materiais do GLB são o quê
 // (padrões: 'nome' = exato, 'prefixo*' = começa com).
 
-import { FERRARI_296_GT3, PORSCHE_992_GT3_R } from './physics/carSpec.js';
+import { FERRARI_296_GT3, PORSCHE_992_GT3_R, LAMBORGHINI_FENOMENO } from './physics/carSpec.js';
 
 export const CARS = [
   {
@@ -77,6 +77,42 @@ export const CARS = [
       ['Aceleração', 7.9],
       ['Frenagem', 9.1],
       ['Curva', 8.7],
+    ],
+  },
+  {
+    id: 'lamborghini-fenomeno',
+    maker: 'Lamborghini',
+    name: 'Fenomeno',
+    year: 2026,
+    category: 'Hypercar',
+    model: 'lamborghini_fenomeno_2026/lamborghini_fenomeno_2026.glb',
+    thumb: 'assets/cars/lamborghini-fenomeno.jpg',
+    spec: LAMBORGHINI_FENOMENO,
+    visual: {
+      wheelbase: 2.779,            // o GLB vem ~23% maior que o carro real
+      // as rodas esquerda e direita vêm na mesma malha: o carregador divide ao meio
+      splitWheels: ['front_tires.001', 'rear_tires*', 'rims_1*', 'carpaint_rims*', 'Caliper*', 'rotors*', 'metal*', 'ext_plastics*', 'Engexttex1Mtl*', 'redbodylight*'],
+      tires: ['front_tires.001', 'rear_tires*'],
+      frontHint: ['dash'],         // os faróis do modelo atravessam o carro; o painel indica a frente
+      tailLights: ['przemo_l.001'],
+      tailLightUseMap: true,
+      discs: ['rotors*'],
+      steeringWheelNodes: ['Object_133', 'Object_134', 'Object_135', 'Object_136', 'Object_137', 'Object_138', 'Object_139'],
+      glass: ['glass_1', 'CAR_GLASS*'],
+    },
+    figures: [
+      ['Potência', '1.080 cv'],
+      ['Peso', '1.690 kg'],
+      ['0–100 km/h', '2,5 s'],
+      ['Velocidade máx.', '353 km/h'],
+      ['Motor', 'V12 6.5 híbrido'],
+      ['Tração', 'Integral'],
+    ],
+    ratings: [
+      ['Velocidade', 9.8],
+      ['Aceleração', 9.7],
+      ['Frenagem', 8.3],
+      ['Curva', 7.6],
     ],
   },
 ];

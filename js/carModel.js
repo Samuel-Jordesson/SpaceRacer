@@ -28,6 +28,17 @@ export async function loadCar(url, cfg, onProgress) {
 
   const has = (m, key) => matches(matName(m), cfg[key]);
 
+  // modelos com as rodas esquerda+direita na mesma malha: divide pelo eixo lateral (x do modelo)
+  if (cfg.splitWheels) {
+    for (const m of [...meshes]) {
+      if (!has(m, 'splitWheels')) continue;
+      const halves = splitByX(m);
+      if (!halves) continue;
+      meshes.splice(meshes.indexOf(m), 1, ...halves);
+    }
+    model.updateMatrixWorld(true);
+  }
+
   // --- 1. pneus e eixos
   const tires = meshes.filter((m) => has(m, 'tires'));
   if (tires.length !== 4) throw new Error(`Esperava 4 pneus, encontrei ${tires.length}`);
@@ -40,7 +51,7 @@ export async function loadCar(url, cfg, onProgress) {
   }
   const mid = ([a, b]) => tc[a].clone().add(tc[b]).multiplyScalar(0.5);
   let [axA, axB] = best.axles;
-  const lights = meshes.filter((m) => has(m, 'headlights')).map(centerOf);
+  const lights = meshes.filter((m) => has(m, cfg.frontHint ? 'frontHint' : 'headlights')).map(centerOf);
   const lightPos = lights.length ? lights[0] : mid(axA);
   if (mid(axB).distanceTo(lightPos) < mid(axA).distanceTo(lightPos)) [axA, axB] = [axB, axA];
   const frontAxle = axA, rearAxle = axB;
@@ -208,7 +219,7 @@ export async function loadCar(url, cfg, onProgress) {
 
   // --- volante: pivô no centro, girando em torno do eixo da coluna (direção de menor variância dos vértices)
   let steeringWheel = null;
-  const swMeshes = meshes.filter((m) => has(m, 'steeringWheel'));
+  const swMeshes = meshes.filter((m) => has(m, 'steeringWheel') || (cfg.steeringWheelNodes || []).includes(m.name));
   if (swMeshes.length) {
     const box = new THREE.Box3();
     for (const m of swMeshes) box.expandByObject(m, true);
@@ -330,6 +341,42 @@ function columnAxis(meshes, center) {
     x = new THREE.Vector3(M[0] * x.x + M[1] * x.y + M[2] * x.z, M[3] * x.x + M[4] * x.y + M[5] * x.z, M[6] * x.x + M[7] * x.y + M[8] * x.z).normalize();
   }
   return x;
+}
+
+// Divide uma malha em metade esquerda/direita (pelo centróide de cada triângulo no x do mundo).
+// Devolve as duas malhas novas (já no lugar da original) ou null se tudo estiver de um lado só.
+function splitByX(mesh) {
+  const geo = mesh.geometry, pos = geo.attributes.position;
+  const idx = geo.index ? geo.index.array : [...Array(pos.count).keys()];
+  const wm = mesh.matrixWorld, v = new THREE.Vector3();
+  const side = [[], []];
+  for (let t = 0; t < idx.length; t += 3) {
+    let x = 0;
+    for (let k = 0; k < 3; k++) x += v.fromBufferAttribute(pos, idx[t + k]).applyMatrix4(wm).x;
+    side[x < 0 ? 0 : 1].push(idx[t], idx[t + 1], idx[t + 2]);
+  }
+  if (!side[0].length || !side[1].length) return null;
+  const out = side.map((tri, i) => {
+    // compacta: só os vértices usados por esta metade
+    const remap = new Map(), order = [];
+    const newIdx = tri.map((o) => { if (!remap.has(o)) { remap.set(o, order.length); order.push(o); } return remap.get(o); });
+    const g = new THREE.BufferGeometry();
+    for (const [name, attr] of Object.entries(geo.attributes)) {
+      const n = attr.itemSize, src = attr.array, dst = new src.constructor(order.length * n);
+      order.forEach((o, j) => { for (let c = 0; c < n; c++) dst[j * n + c] = src[o * n + c]; });
+      g.setAttribute(name, new THREE.BufferAttribute(dst, n, attr.normalized));
+    }
+    g.setIndex(newIdx);
+    const m = new THREE.Mesh(g, mesh.material);
+    m.name = `${mesh.name}_${i ? 'R' : 'L'}`;
+    m.matrix.copy(mesh.matrix);
+    m.matrix.decompose(m.position, m.quaternion, m.scale);
+    mesh.parent.add(m);
+    return m;
+  });
+  mesh.parent.remove(mesh);
+  geo.dispose();
+  return out;
 }
 
 // Inverte a ordem dos triângulos se a maioria contradiz as normais dos vértices.

@@ -94,7 +94,7 @@ export class CarAudio {
     if (!this.ctx) return;
     const t = this.ctx.currentTime, k = 0.03;
     const rpm = Math.max(300, car.engine.rpm);
-    const f = rpm / 60 * 3; // V6 quatro tempos: 3 combustões por volta
+    const f = rpm / 60 * ((car.spec.engine.cylinders || 6) / 2); // quatro tempos: cilindros/2 combustões por volta
     for (const o of this.oscs) o.osc.frequency.setTargetAtTime(f * o.mult, t, 0.01);
     const load = car.engine.throttle;
     const limiter = car.engine.limiter ? 0.55 + 0.45 * Math.sin(t * 90) : 1;
