@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Space Racer</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+        "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+        "postprocessing": "https://cdn.jsdelivr.net/npm/postprocessing@6.36.4/build/index.js",
+        "n8ao": "https://cdn.jsdelivr.net/npm/n8ao@1.10.1/dist/N8AO.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- ===== garagem ===== -->
+  <div id="garage-ui">
+    <header class="g-top">
+      <div class="brand">SPACE<span>RACER</span></div>
+      <nav><span class="active">Garagem</span></nav>
+    </header>
+
+    <div id="garage-empty"><span>Escolha um carro</span></div>
+
+    <section id="car-info">
+      <div id="car-maker"></div>
+      <h1 id="car-name"></h1>
+      <div id="car-meta"></div>
+      <div id="car-ratings"></div>
+      <div id="car-figures"></div>
+    </section>
+
+    <footer class="g-bottom">
+      <div class="strip-head"><span>Carros</span><small>Arraste o carro para girar</small></div>
+      <div id="car-strip"></div>
+      <div class="actions">
+        <button id="cine-btn" disabled><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>Cinematic</span></button>
+        <button id="play" disabled><span>Pilotar</span><kbd>Enter</kbd></button>
+      </div>
+    </footer>
+  </div>
+
+  <div id="hud">
+    <div id="top-left">
+      <div class="assists"><span id="a-abs">ABS</span><span id="a-tc">TC</span><span id="a-gb">AUTO</span></div>
+      <div class="small"><span id="cam-name"></span> · <span id="input-src"></span> · <span id="fps"></span></div>
+    </div>
+
+    <div id="dash">
+      <div id="shift-lights"></div>
+      <div id="rpm-bar"><div id="rpm-fill"></div><span id="rpm-text">0</span></div>
+      <div id="main-readout">
+        <div class="pedals">
+          <div class="pedal"><div id="clu"></div></div>
+          <div class="pedal"><div id="brk"></div></div>
+          <div class="pedal"><div id="thr"></div></div>
+        </div>
+        <div id="gear">N</div>
+        <div class="speed-box"><div id="speed">0</div><div class="unit">km/h</div></div>
+        <div id="steer-wheel"><div id="steer-ind"></div></div>
+      </div>
+    </div>
+
+    <div id="bottom-right">
+      <canvas id="gmeter" width="130" height="130"></canvas>
+      <div id="tires">
+        <div class="tire-slot"><div class="tire"></div></div>
+        <div class="tire-slot"><div class="tire"></div></div>
+        <div class="tire-slot"><div class="tire"></div></div>
+        <div class="tire-slot"><div class="tire"></div></div>
+      </div>
+    </div>
+
+    <div id="msg"></div>
+    <div id="hint">H controles · Esc garagem</div>
+    <div id="credit"></div>
+  </div>
+
+  <div id="help">
+    <h2>Controles</h2>
+    <table>
+      <tr><td>W / ↑</td><td>Acelerar</td></tr>
+      <tr><td>S / ↓</td><td>Frear</td></tr>
+      <tr><td>A D / ← →</td><td>Esterçar</td></tr>
+      <tr><td>Espaço</td><td>Freio de mão</td></tr>
+      <tr><td>E / Shift</td><td>Subir marcha</td></tr>
+      <tr><td>Q / Ctrl</td><td>Reduzir marcha (1 → N → R parado)</td></tr>
+      <tr><td>M</td><td>Câmbio automático / manual</td></tr>
+      <tr><td>B / T</td><td>Liga/desliga ABS / controle de tração</td></tr>
+      <tr><td>C</td><td>Trocar câmera</td></tr>
+      <tr><td>R</td><td>Reposicionar carro</td></tr>
+      <tr><td>G</td><td>Qualidade gráfica (Baixo / Médio / Alto / Ultra)</td></tr>
+      <tr><td>N / P</td><td>Mudo / pausa</td></tr>
+      <tr><td>Esc</td><td>Voltar para a garagem</td></tr>
+      <tr><td>Controle</td><td>Analógico esquerdo, RT/LT, RB/LB marchas, A freio de mão, Y câmera</td></tr>
+    </table>
+    <p>Pneus no HUD: verde = aderindo, amarelo = no limite, vermelho = deslizando, azul = travado.</p>
+  </div>
+
+  <!-- cinemática do carro -->
+  <div id="cine">
+    <div class="bar top"></div><div class="bar bottom"></div>
+    <div id="cine-title"><div id="cine-maker"></div><div id="cine-name"></div></div>
+    <div id="cine-hint">Pressione qualquer tecla para voltar</div>
+    <div id="cine-dip"></div>
+  </div>
+
+  <!-- transição garagem ↔ pista -->
+  <div id="fade"><div class="fade-box"><div id="fade-text"></div><div class="fade-bar"><div id="fade-fill"></div></div></div></div>
+  <!-- enquanto os módulos carregam -->
+  <div id="boot"><div class="brand">SPACE<span>RACER</span></div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
