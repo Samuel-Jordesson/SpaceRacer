@@ -28,6 +28,10 @@ if(NOT SDL3_FOUND)
     message(STATUS "SDL3: biblioteca do sistema (${SDL3_SYSTEM_LIB}) + cabeçalhos baixados")
   else()
     # 3) compila o SDL3 junto (Windows, macOS, Linux sem SDL3)
+    # extensões do X11 que o jogo não usa (protetor de tela, simulação de entrada): sem elas o
+    # SDL3 compila num Ubuntu que não tem libxss-dev / libxtst-dev
+    set(SDL_X11_XSCRNSAVER OFF CACHE BOOL "" FORCE)
+    set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)

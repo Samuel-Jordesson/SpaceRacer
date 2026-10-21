@@ -4,6 +4,9 @@
 
 #include "../render/postfx.h"
 
+// menor janela permitida (a interface escala junto com a janela)
+constexpr int MIN_WINDOW_W = 480, MIN_WINDOW_H = 270;
+
 struct Settings {
   // gráficos
   int preset = 2;            // 0..3 = Baixo/Médio/Alto/Ultra; −1 = personalizado
@@ -18,6 +21,10 @@ struct Settings {
   // tela
   bool fullscreen = false;
   bool vsync = true;
+  // modo janela: tamanho (em pontos), posição e se estava maximizada — lembrados entre sessões
+  int windowW = 1600, windowH = 900;
+  int windowX = -1, windowY = -1;  // −1 = centralizada
+  bool windowMax = true;
   // som
   float volume = 1;
   // garagem

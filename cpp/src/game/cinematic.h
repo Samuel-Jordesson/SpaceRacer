@@ -44,6 +44,8 @@ class Cinematic {
   };
   void beginShot();
   void finish();
+  void startFlight();
+  void updateFlight(float dt);
   std::vector<Shot> buildShots(LoadedCar& loaded);
 
   Garage& garage;
@@ -52,6 +54,11 @@ class Cinematic {
   int index = 0, loops = 0;
   float t = 0, sinceStart = 0, closeTimer = 0, hintTimer = 0, dipT = 1e9f, pulse = 0;
   struct Saved { vec3 pos, target; float fov; bool autoRotate; } saved{};
+  // saída: depois das barras, a câmera voa do último plano até a posição do menu
+  vec3 lastLook;
+  bool flying = false;
+  float flightT = 0;
+  struct Flight { vec3 pos0, look0, look1; float fov0, fov1, ap0; float r0, r1, az0, az1, el0, el1; } flight{};
   std::string maker, name;
   // transições do CSS
   Transition bars{0, 2.6f, Bezier{0.45f, 0, 0.25f, 1}};

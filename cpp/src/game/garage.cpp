@@ -305,6 +305,12 @@ void Garage::showCar(const std::shared_ptr<LoadedCar>& loaded) {
   car = loaded;
   resetPose(*loaded);
   turntable->add(loaded->root);
+  // carros compridos (BMW M4 GT3: 5,02 m) pedem a câmera mais longe para caber no quadro
+  loaded->root->updateMatrixWorld();
+  Box3 b = worldBox(*loaded->root);
+  float len = b.empty() ? 4.6f : std::max(b.max.z - b.min.z, b.max.x - b.min.x);
+  carScale = std::max(1.0f, len / 4.6f);
+  updateDistance();
   intro = 0;  // animação de entrada
 }
 
@@ -315,17 +321,21 @@ void Garage::reclaimCar() {
   turntable->add(car->root);
 }
 
-void Garage::resize(int w, int h, float d) {
-  winW = w;
-  winH = h;
-  dpr = d;
-  float aspect = camera.aspect = (float)w / std::max(1, h);
-  // telas estreitas (celular em pé) precisam de mais distância para o carro caber
-  float dist = baseDist = 7.2f * std::max(1.0f, 1.2f / aspect);
+// distância da câmera: telas estreitas (celular em pé) e carros compridos pedem mais distância
+void Garage::updateDistance() {
+  float dist = baseDist = 7.2f * std::max(1.0f, 1.2f / camera.aspect) * carScale;
   controls.minDistance = dist * 0.72f;
   controls.maxDistance = dist * 1.45f;
   scene.fog.near = dist + 7;
   scene.fog.far = dist + 31;
+}
+
+void Garage::resize(int w, int h, float d) {
+  winW = w;
+  winH = h;
+  dpr = d;
+  camera.aspect = (float)w / std::max(1, h);
+  updateDistance();
   fx.resize(w, h, d);
   mirror->resize((int)std::floor(w * 0.75f), (int)std::floor(h * 0.75f));
 }

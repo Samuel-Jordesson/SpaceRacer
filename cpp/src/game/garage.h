@@ -57,6 +57,8 @@ class Garage {
   Cinematic* cine = nullptr;
   bool active = false;
   float intro = 1, baseDist = 7.2f;
+  float carScale = 1;  // comprimento do carro em relação a um GT3 típico (4,6 m)
+  void updateDistance();
   int winW = 1, winH = 1;
   float dpr = 1;
 

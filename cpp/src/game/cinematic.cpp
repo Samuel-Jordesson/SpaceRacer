@@ -2,11 +2,14 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "garage.h"
 
-static const float BARS_S = 2.6f;  // tempo das barras pretas entrando/saindo
+static const float BARS_S = 2.6f;    // tempo das barras pretas entrando/saindo
+static const float FLIGHT_S = 2.4f;  // voo da câmera até o menu, depois que as barras saem
+static const float STEER_SHOW = 0.28f;  // rodas da frente viradas durante o filme
 
 Cinematic::Cinematic(Garage& g) : garage(g) {}
 
@@ -24,8 +27,9 @@ void Cinematic::start(const CarEntry& entry, const std::shared_ptr<LoadedCar>& l
   // rodas da frente viradas para mostrar o aro
   for (const char* id : {"FL", "FR"}) {
     auto it = loaded->pivots.find(id);
-    if (it != loaded->pivots.end()) it->second.steer->setRotationY(0.28f);
+    if (it != loaded->pivots.end()) it->second.steer->setRotationY(STEER_SHOW);
   }
+  flying = false;
   shots = buildShots(*loaded);
   index = 0;
   t = 0;
@@ -53,14 +57,69 @@ bool Cinematic::requestExit() {
   return true;
 }
 
+// as barras saíram: a câmera parte de onde o filme parou e voa, em arco em volta do carro
+// (coordenadas esféricas: não atravessa a carroceria), até o enquadramento do menu
+void Cinematic::startFlight() {
+  Garage& g = garage;
+  flying = true;
+  flightT = 0;
+  Flight& f = flight;
+  f.pos0 = g.camera.position;
+  f.look0 = lastLook;
+  f.look1 = saved.target;
+  f.fov0 = g.camera.fov;
+  f.fov1 = saved.fov;
+  f.ap0 = g.fx.aperture;
+  // destino: a mesma direção de antes do filme, na distância do menu (a entrada da garagem termina aqui)
+  vec3 dir1 = normalize(saved.pos - saved.target);
+  vec3 o0 = f.pos0 - f.look1, o1 = dir1 * g.baseDist;
+  f.r0 = length(o0);
+  f.r1 = length(o1);
+  f.az0 = std::atan2(o0.x, o0.z);
+  f.az1 = std::atan2(o1.x, o1.z);
+  // gira pelo caminho mais curto
+  while (f.az1 - f.az0 > (float)M_PI) f.az1 -= 2 * (float)M_PI;
+  while (f.az1 - f.az0 < -(float)M_PI) f.az1 += 2 * (float)M_PI;
+  f.el0 = std::asin(std::clamp(o0.y / std::max(f.r0, 1e-4f), -1.f, 1.f));
+  f.el1 = std::asin(std::clamp(o1.y / std::max(f.r1, 1e-4f), -1.f, 1.f));
+}
+
+void Cinematic::updateFlight(float dt) {
+  Garage& g = garage;
+  flightT = std::min(1.f, flightT + dt / FLIGHT_S);
+  float k = flightT;
+  float e = k < 0.5f ? 4 * k * k * k : 1 - std::pow(-2 * k + 2, 3.f) / 2;  // easeInOutCubic
+  const Flight& f = flight;
+  // posição em órbita em volta do carro (em e = 0 é exatamente onde o filme parou)
+  float az = f.az0 + (f.az1 - f.az0) * e, el = f.el0 + (f.el1 - f.el0) * e, r = f.r0 + (f.r1 - f.r0) * e;
+  vec3 pos = f.look1 + vec3(std::sin(az) * std::cos(el), std::sin(el), std::cos(az) * std::cos(el)) * r;
+  vec3 look = lerp(f.look0, f.look1, e);
+  Camera& cam = g.camera;
+  cam.position = pos;
+  cam.up = vec3(0, 1, 0);
+  cam.lookAt(look);
+  cam.fov = f.fov0 + (f.fov1 - f.fov0) * e;
+  // a profundidade de campo de cinema some aos poucos
+  g.fx.focus = distance(pos, look);
+  g.fx.aperture = f.ap0 * (1 - e);
+  // rodas da frente voltam a ficar retas
+  for (const char* id : {"FL", "FR"}) {
+    auto it = loaded->pivots.find(id);
+    if (it != loaded->pivots.end()) it->second.steer->setRotationY(STEER_SHOW * (1 - e));
+  }
+  if (k >= 1) finish();
+}
+
 void Cinematic::finish() {
   active = false;
   closing = false;
   Garage& g = garage;
   g.fx.bokeh = false;
-  g.camera.position = saved.pos;
+  flying = false;
+  // a câmera já está na pose do menu (o voo terminou nela)
   g.controls.target = saved.target;
   g.camera.fov = saved.fov;
+  g.intro = 1;
   g.controls.enabled = true;
   g.controls.autoRotate = saved.autoRotate;
   for (const char* id : {"FL", "FR"}) {
@@ -82,10 +141,14 @@ void Cinematic::beginShot() {
 void Cinematic::update(float dt) {
   if (!active) return;
   sinceStart += dt;
+  if (flying) {
+    updateFlight(dt);
+    return;
+  }
   if (closing) {
     closeTimer -= dt;
     if (closeTimer <= 0) {
-      finish();
+      startFlight();
       return;
     }
   }
@@ -120,6 +183,7 @@ void Cinematic::update(float dt) {
   cam.position = pos;
   cam.up = vec3(0, 1, 0);
   cam.lookAt(look);
+  lastLook = look;
   cam.fov = shot.fov0 + ((shot.fov1 >= 0 ? shot.fov1 : shot.fov0) - shot.fov0) * k;
   // foco no assunto do plano
   vec3 focusOn = shot.orbit ? shot.orbit->c : look;

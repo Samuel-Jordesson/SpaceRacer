@@ -16,7 +16,25 @@ if [ -z "$CMAKE" ]; then
   CMAKE="$DIR/bin/cmake"
 fi
 
+# Linux: o SDL3 só ganha driver de som se os cabeçalhos de áudio estiverem instalados
+AUDIO=""
+if [ "$(uname)" = "Linux" ]; then
+  [ -f /usr/include/alsa/asoundlib.h ] && AUDIO="$AUDIO alsa"
+  [ -f /usr/include/pulse/pulseaudio.h ] && AUDIO="$AUDIO pulse"
+  [ -d /usr/include/pipewire-0.3 ] && AUDIO="$AUDIO pipewire"
+  if [ -z "$AUDIO" ]; then
+    echo "AVISO: nenhum cabeçalho de áudio encontrado; o jogo vai compilar, mas sem som."
+    echo "       Para ter som: sudo apt install libasound2-dev libpulse-dev  e rode este script de novo."
+  fi
+  # se os pacotes de áudio mudaram desde a última compilação, refaz a detecção do SDL3
+  if [ -f build/CMakeCache.txt ] && [ "$(cat build/.audio 2>/dev/null)" != "$AUDIO" ]; then
+    echo "Pacotes de áudio mudaram; reconfigurando o SDL3 ..."
+    rm -rf build/CMakeCache.txt build/CMakeFiles
+  fi
+fi
+
 "$CMAKE" -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
+[ "$(uname)" = "Linux" ] && echo "$AUDIO" > build/.audio
 "$CMAKE" --build build -j"$(nproc 2>/dev/null || echo 4)"
 echo
 echo "Pronto: ./space_racer (na pasta do projeto)  ·  testes da física: ./sr_physics_test"

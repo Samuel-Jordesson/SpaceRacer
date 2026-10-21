@@ -12,8 +12,14 @@
 
 struct VisualCfg {
   float wheelbase = 0;  // ajusta a escala pelo entre-eixos real
+  std::vector<std::string> splitWheelsZ;  // rodas dianteiras e traseiras na mesma malha
+  float splitZ = 0;                       // onde cortar (z do modelo, entre os eixos)
+  // frontHint: material ou nome de peça que fica na frente do carro (define o sentido)
   std::vector<std::string> splitWheels, tires, frontHint, headlights, tailLights, brakeGlow, discs, rimBlur;
   std::vector<std::string> steeringWheel, steeringWheelNodes, glass, paint;
+  std::vector<std::string> tailLightNodes;  // lanternas pelo nome da peça (ganham material próprio)
+  std::vector<std::string> hideNodes;       // peças que não pertencem ao carro
+  bool stripEmissive = false;               // ignora a emissão do GLB (faróis/lanternas são religados depois)
   float headlightGlow = 0;
   bool tailLightUseMap = false;
   bool fixBodyMetal = false;

@@ -86,6 +86,7 @@ struct Shift {
   int target;
   double t;
   bool up;
+  double duration = 0;  // tempo da troca (engatar a partir do neutro é quase instantâneo)
 };
 
 class Vehicle {
@@ -98,6 +99,8 @@ class Vehicle {
   double speed() const { return vel.length(); }
   double forwardSpeed() const { return vel.dot(quat.toMat3().mulV(V3(0, 0, -1))); }
   double drivenOmega() const;
+  int drivenLeft() const;
+  double shiftDuration(int from, int to) const;  // índice da roda motriz esquerda (0 = dianteira, 2 = traseira)
   bool shiftUp();
   bool shiftDown();
   void step(double dt, const Controls& input);

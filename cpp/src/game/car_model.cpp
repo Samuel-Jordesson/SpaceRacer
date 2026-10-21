@@ -91,15 +91,19 @@ vec3 columnAxis(const std::vector<Node*>& meshes, const vec3& center) {
 }
 
 // Divide uma malha em metade esquerda/direita (pelo centróide de cada triângulo no x do mundo).
-std::vector<NodePtr> splitByX(const NodePtr& mesh) {
+// axis: 0 = x (esquerda/direita), 2 = z (frente/trás); "at" = coordenada do corte no mundo
+std::vector<NodePtr> splitByAxis(const NodePtr& mesh, int axis, float at) {
   Geometry& geo = *mesh->geometry;
   size_t nIdx = geo.idx.empty() ? geo.pos.size() : geo.idx.size();
   auto vi = [&](size_t k) { return geo.idx.empty() ? (uint32_t)k : geo.idx[k]; };
   std::vector<uint32_t> side[2];
   for (size_t t = 0; t + 2 < nIdx; t += 3) {
-    float x = 0;
-    for (int k = 0; k < 3; k++) x += mesh->matrixWorld.point(geo.pos[vi(t + k)]).x;
-    auto& s = side[x < 0 ? 0 : 1];
+    float c = 0;
+    for (int k = 0; k < 3; k++) {
+      vec3 p = mesh->matrixWorld.point(geo.pos[vi(t + k)]);
+      c += axis == 0 ? p.x : p.z;
+    }
+    auto& s = side[c / 3 < at ? 0 : 1];
     s.push_back(vi(t)); s.push_back(vi(t + 1)); s.push_back(vi(t + 2));
   }
   if (side[0].empty() || side[1].empty()) return {};
@@ -126,7 +130,7 @@ std::vector<NodePtr> splitByX(const NodePtr& mesh) {
       if (!geo.uv1.empty()) g->uv1.push_back(geo.uv1[o]);
     }
     g->computeBounds();
-    auto m = makeNode(mesh->name + (i ? "_R" : "_L"));
+    auto m = makeNode(mesh->name + (axis == 0 ? (i ? "_R" : "_L") : (i ? "_zpos" : "_zneg")));
     m->geometry = g;
     m->material = mesh->material;
     m->position = mesh->position;
@@ -177,13 +181,45 @@ std::shared_ptr<LoadedCar> loadCar(const std::string& path, const VisualCfg& cfg
   if (!cfg.splitWheels.empty()) {
     for (auto m : std::vector<NodePtr>(meshes)) {
       if (!has(*m, cfg.splitWheels)) continue;
-      auto halves = splitByX(m);
+      auto halves = splitByAxis(m, 0, 0);
       if (halves.empty()) continue;
       auto it = std::find(meshes.begin(), meshes.end(), m);
       it = meshes.erase(it);
       meshes.insert(it, halves.begin(), halves.end());
     }
     model->updateMatrixWorld();
+  }
+  // e modelos com os eixos dianteiro e traseiro na mesma malha: divide também frente/trás
+  if (!cfg.splitWheelsZ.empty()) {
+    for (auto m : std::vector<NodePtr>(meshes)) {
+      if (!has(*m, cfg.splitWheelsZ)) continue;
+      auto halves = splitByAxis(m, 2, cfg.splitZ);
+      if (halves.empty()) continue;
+      auto it = std::find(meshes.begin(), meshes.end(), m);
+      it = meshes.erase(it);
+      meshes.insert(it, halves.begin(), halves.end());
+    }
+    model->updateMatrixWorld();
+  }
+
+  // peças que não fazem parte do carro (sobras do arquivo): some com elas
+  if (!cfg.hideNodes.empty()) {
+    std::vector<NodePtr> keep;
+    for (auto& m : meshes) {
+      if (std::find(cfg.hideNodes.begin(), cfg.hideNodes.end(), m->name) != cfg.hideNodes.end()) {
+        if (m->parent) m->parent->remove(m.get());
+      } else keep.push_back(m);
+    }
+    meshes = keep;
+  }
+  // exportações do Blender às vezes põem a textura de cor também como emissão: o carro "brilharia"
+  if (cfg.stripEmissive) {
+    std::set<Material*> done;
+    for (auto& m : meshes) {
+      if (!m->material || !done.insert(m->material.get()).second) continue;
+      m->material->emissive = vec3(0, 0, 0);
+      m->material->emissiveMap = {};
+    }
   }
 
   // --- 1. pneus e eixos
@@ -204,7 +240,8 @@ std::shared_ptr<LoadedCar> loadCar(const std::string& path, const VisualCfg& cfg
   auto mid = [&](std::array<int, 2> a) { return (tc[a[0]] + tc[a[1]]) * 0.5f; };
   std::vector<vec3> lights;
   for (auto& m : meshes)
-    if (has(*m, !cfg.frontHint.empty() ? cfg.frontHint : cfg.headlights)) lights.push_back(centerOf(*m));
+    if (!cfg.frontHint.empty() ? (has(*m, cfg.frontHint) || matches(m->name, cfg.frontHint)) : has(*m, cfg.headlights))
+      lights.push_back(centerOf(*m));
   vec3 lightPos = lights.empty() ? mid(axA) : lights[0];
   if (distance(mid(axB), lightPos) < distance(mid(axA), lightPos)) std::swap(axA, axB);
   auto frontAxle = axA, rearAxle = axB;
@@ -350,6 +387,12 @@ std::shared_ptr<LoadedCar> loadCar(const std::string& path, const VisualCfg& cfg
     if (!has(*m, cfg.tailLights)) continue;
     if (std::find(car->tailLights.begin(), car->tailLights.end(), m->material) == car->tailLights.end()) car->tailLights.push_back(m->material);
   }
+  // por nome de peça: ganham material próprio (a mesma lâmpada pode ter sido dividida em frente/trás)
+  for (auto& m : meshes) {
+    if (std::find(cfg.tailLightNodes.begin(), cfg.tailLightNodes.end(), m->name) == cfg.tailLightNodes.end()) continue;
+    m->material = std::make_shared<Material>(*m->material);
+    car->tailLights.push_back(m->material);
+  }
   for (auto& m : car->tailLights) {
     m->emissive = vec3(1, 0.06f, 0.03f);
     if (cfg.tailLightUseMap && m->map) {
@@ -463,10 +506,18 @@ std::shared_ptr<LoadedCar> loadCar(const std::string& path, const VisualCfg& cfg
     car->cockpit = VisualCfg::Cockpit{{c.x, c.y + 0.29f, c.z + 0.40f}, {c.x, c.y + 0.26f, c.z + 0.58f}};
   }
 
+  // modelo sem interior: a câmera "Cockpit" vira câmera de para-choque (baixa, na ponta do carro)
+  if (!car->cockpit && !car->steeringWheel) {
+    root->updateMatrixWorld();
+    Box3 b = worldBox(*root);
+    car->cockpit = VisualCfg::Cockpit{vec3(0, 0.45f, b.min.z - 0.05f), vec3(0, -10, 0)};  // nenhum capacete a esconder
+  }
+
   // câmera de capô: acha a superfície do capô com um raio vindo de cima, à frente do para-brisa
   car->hoodEye = cfg.hoodEye;
-  if (!car->hoodEye && car->steeringWheel) {
-    float z = car->steeringWheel->pivot->position.z - 0.7f;
+  if (!car->hoodEye) {
+    // sem volante (modelo sem interior): logo atrás do eixo dianteiro
+    float z = car->steeringWheel ? car->steeringWheel->pivot->position.z - 0.7f : -car->geometry.wheelbase / 2 + 0.55f;
     root->updateMatrixWorld();
     for (auto& hit : raycast(*root, vec3(0, 3, z), vec3(0, -1, 0), 0, 3)) {
       if (matches(matName(*hit.object), cfg.glass)) continue;

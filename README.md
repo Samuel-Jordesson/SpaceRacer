@@ -13,7 +13,7 @@ Abra http://localhost:8080. Precisa de um servidor local, porque abrir o `index.
 
 ## Telas
 
-- **Garagem (tela inicial):** estúdio branco infinito com piso de porcelanato polido. O reflexo do carro no piso é real (reflexo planar). Embaixo fica a lista de carros na horizontal: clique num card para carregar o carro, arraste para girá-lo e use **Pilotar** (ou Enter) para entrar na pista.
+- **Garagem (tela inicial):** estúdio branco infinito com piso de porcelanato polido. O reflexo do carro no piso é real (reflexo planar). Embaixo fica a lista de carros na horizontal: clique num card para carregar o carro, arraste para girá-lo e use **Pilotar** (ou Enter) para entrar na pista. Quando os carros não cabem, a lista rola: arraste-a para os lados, use a rodinha do mouse em cima dela ou as setas/direcional (ela acompanha o carro selecionado). As bordas com mais carros somem num degradê, mostrando um pedaço do próximo.
 - **Pista:** **Esc** volta para a garagem. O mundo só é carregado uma vez; da segunda vez em diante a entrada é instantânea.
 
 Para adicionar um carro, inclua uma entrada em `js/cars.js` com o GLB, a miniatura (`assets/cars/`), o spec de física (`js/physics/carSpec.js`) e o bloco `visual`, que diz quais materiais do GLB são pneus, faróis, lanternas, discos, volante e vidros. A escala e a orientação do modelo são corrigidas automaticamente pelo entre-eixos real.
@@ -54,11 +54,17 @@ cpp/build.sh       # ou: npm run native
 ./space_racer
 ```
 
+No Ubuntu/Debian, instale antes os pacotes de som (sem eles o jogo compila e abre, mas fica mudo):
+
+```bash
+sudo apt install libasound2-dev libpulse-dev
+```
+
 O `build.sh` usa o CMake do sistema e, se não houver, baixa um CMake portátil para `cpp/.tools`. O SDL3 vem do sistema (`libsdl3-dev`) ou é baixado pelo CMake. Na primeira compilação é preciso internet. `./sr_physics_test` roda os mesmos testes de `npm test` e dá os mesmos números da versão JS. **F11** alterna a tela cheia. O resto dos controles é igual.
 
 **Controles de videogame:** Xbox, PlayStation e controles genéricos funcionam no jogo todo, e os ícones das dicas trocam sozinhos para o aparelho em uso. Nos menus: direcional ou analógico para escolher, A/✕ para confirmar, B/○ para voltar e LB/RB (L1/R1) para trocar de aba. Na pista: RT/LT acelera e freia, o analógico esterça, A/✕ é o freio de mão, RB/LB troca de marcha, Y/△ troca a câmera, Start/Options reposiciona o carro, ↑ mostra a ajuda e View/Share volta para a garagem.
 
-Na garagem, a aba **Configurações** (ao lado de Garagem) ajusta qualidade (Baixo a Ultra), resolução, anti-serrilhado, oclusão de ambiente, sombras, bloom, efeitos de lente, desfoque de velocidade, qualidade automática, tela cheia, VSync e volume. As mudanças aparecem na hora e ficam salvas em `~/.local/share/SpaceRacer/SpaceRacer/settings.ini`.
+Na garagem, a aba **Configurações** (ao lado de Garagem) ajusta qualidade (Baixo a Ultra), resolução, anti-serrilhado, oclusão de ambiente, sombras, bloom, efeitos de lente, desfoque de velocidade, qualidade automática, modo de exibição (tela cheia ou janela), tamanho da janela (1280×720, 1600×900, 1920×1080 ou maximizada), VSync e volume. Em janela também dá para arrastar a borda e deixar do tamanho que quiser (mínimo 480×270); o HUD e os menus escalam junto com a janela, sempre na mesma proporção da tela; o jogo lembra o modo, o tamanho e a posição da janela na próxima vez que abrir. As mudanças aparecem na hora e ficam salvas em `~/.local/share/SpaceRacer/SpaceRacer/settings.ini`.
 
 | JS | C++ |
 |---|---|
@@ -85,5 +91,9 @@ Para testes automatizados, `SR_SCRIPT="sel 0;ready;play;ready;down W;wait 3;shot
 
 - Modelo: "Ferrari 296 GT3" por vecarz (Sketchfab), licença CC BY-NC 4.0. O crédito é obrigatório e o uso comercial não é permitido.
 - Modelo: "2024 Porsche 992 GT3 R" por Dave Love (Sketchfab), licença CC BY 4.0. O crédito é obrigatório.
+- Modelo: "Lamborghini Fenomeno 2026" por VTX (Sketchfab), licença CC BY-NC-SA 4.0. Crédito obrigatório, sem uso comercial.
+- Modelo: "BMW M4 GT3 EVO" por VTX (Sketchfab), licença CC BY-NC-SA 4.0. Crédito obrigatório, sem uso comercial.
+- Modelo: "Honda Civic Type R FL5 Custom" por blakebella (Sketchfab), licença CC BY-NC-ND 4.0. Crédito obrigatório, sem uso comercial e sem distribuir versões modificadas do modelo.
+- Brasões das marcas: ver `assets/brands/CREDITS.txt`.
 - Céu `kloofendal_48d_partly_cloudy_puresky` e asfalto `asphalt_02`: Poly Haven, CC0.
 - Oclusão de ambiente: N8AO (MIT).

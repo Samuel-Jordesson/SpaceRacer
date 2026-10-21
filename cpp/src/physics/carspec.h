@@ -66,6 +66,7 @@ struct CarSpec {
   double mass;
   struct { double pitch, yaw, roll; } inertia;
   double cgHeight, frontWeight;
+  bool frontDrive = false;  // tração dianteira (motor → rodas da frente); padrão: traseira
   Geometry geometry;
   struct { Suspension front, rear; double bumpStopK; } suspension;
   TireParams tire;
@@ -83,5 +84,7 @@ struct CarSpec {
 extern CarSpec FERRARI_296_GT3;
 extern CarSpec PORSCHE_992_GT3_R;
 extern CarSpec LAMBORGHINI_FENOMENO;
+extern CarSpec BMW_M4_GT3_EVO;
+extern CarSpec HONDA_CIVIC_TYPE_R;
 
 }  // namespace phys

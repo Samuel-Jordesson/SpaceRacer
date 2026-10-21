@@ -40,6 +40,10 @@ int main() {
       {&PORSCHE_992_GT3_R, {{2.8, 4.3}, {7.5, 12.5}, {270, 300}, {75, 150}, {1.4, 2.6}}},
       // oficial: 0–100 em 2,4 s, 0–200 em 6,7 s, > 350 km/h; pneu de rua = menos g lateral
       {&LAMBORGHINI_FENOMENO, {{2.1, 2.9}, {5.9, 7.6}, {345, 365}, {90, 175}, {1.05, 1.7}}},
+      // GT3 de motor dianteiro: ~280–290 km/h de máxima em Le Mans/Monza
+      {&BMW_M4_GT3_EVO, {{2.8, 4.2}, {7, 12}, {270, 300}, {75, 150}, {1.4, 2.6}}},
+      // oficial: 0–100 em ~5,4 s, 275 km/h; carro de rua com pneu de rua e tração dianteira
+      {&HONDA_CIVIC_TYPE_R, {{4.8, 6.3}, {14, 24}, {260, 290}, {110, 200}, {0.9, 1.35}}},
   };
 
   for (const auto& [spec, expect] : suites) {

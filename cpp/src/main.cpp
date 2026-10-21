@@ -190,6 +190,62 @@ class App {
 
   ~App() {
     if (loadThread.joinable()) loadThread.join();
+    settings.save();  // guarda o tamanho/posição da janela
+  }
+
+  // modo janela: lembra tamanho, posição e se está maximizada (ignora a tela cheia)
+  void rememberWindow() {
+    SDL_WindowFlags f = SDL_GetWindowFlags(window);
+    if (f & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED)) return;
+    settings.windowMax = f & SDL_WINDOW_MAXIMIZED;
+    if (settings.windowMax) return;
+    SDL_GetWindowSize(window, &settings.windowW, &settings.windowH);
+    int x, y;
+    if (SDL_GetWindowPosition(window, &x, &y) && x >= 0 && y >= 0) {
+      settings.windowX = x;
+      settings.windowY = y;
+    }
+  }
+
+  // tamanhos prontos do modo janela (o último item é "maximizada")
+  static constexpr int WINDOW_SIZES[3][2] = {{1280, 720}, {1600, 900}, {1920, 1080}};
+  int windowSizeIndex() const {
+    if (settings.windowMax) return 3;
+    for (int i = 0; i < 3; i++)
+      if (settings.windowW == WINDOW_SIZES[i][0] && settings.windowH == WINDOW_SIZES[i][1]) return i;
+    return -1;  // tamanho livre (redimensionada à mão)
+  }
+  void setWindowSize(int i) {
+    settings.fullscreen = false;
+    SDL_SetWindowFullscreen(window, false);
+    if (i == 3) {
+      settings.windowMax = true;
+      SDL_MaximizeWindow(window);
+    } else {
+      settings.windowMax = false;
+      settings.windowW = WINDOW_SIZES[i][0];
+      settings.windowH = WINDOW_SIZES[i][1];
+      SDL_RestoreWindow(window);
+      SDL_SetWindowSize(window, settings.windowW, settings.windowH);
+      SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+      settings.windowX = settings.windowY = -1;
+    }
+    changed(false);
+  }
+
+  // "restaurar padrão" volta gráficos e som, mas mantém a janela e as escolhas da garagem
+  void resetSettings() {
+    Settings keep = settings;
+    settings = Settings{};
+    settings.fullscreen = keep.fullscreen;
+    settings.windowW = keep.windowW;
+    settings.windowH = keep.windowH;
+    settings.windowX = keep.windowX;
+    settings.windowY = keep.windowY;
+    settings.windowMax = keep.windowMax;
+    settings.lastCar = keep.lastCar;
+    settings.lastMap = keep.lastMap;
+    changed(false);
   }
 
   bool running = true;
@@ -205,6 +261,11 @@ class App {
     if (scale > 0) dpr = scale;
     cssW = (int)std::lround(pw / dpr);
     cssH = (int)std::lround(ph / dpr);
+    // a interface (HUD, menus) foi desenhada para 1600×900 e escala junto com a janela,
+    // ocupando sempre a mesma proporção da tela
+    uiScale = std::max(0.3f, std::min(cssW / 1600.f, cssH / 900.f));
+    uiW = cssW / uiScale;
+    uiH = cssH / uiScale;
     if (mode == Mode::Game) game.resize(cssW, cssH, dpr);
     else garage.resize(cssW, cssH, dpr);
     // os dois precisam do tamanho certo quando forem ativados
@@ -214,8 +275,14 @@ class App {
   void event(const SDL_Event& e) {
     switch (e.type) {
       case SDL_EVENT_QUIT: running = false; break;
-      case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       case SDL_EVENT_WINDOW_RESIZED:
+        rememberWindow();
+        resize();
+        break;
+      case SDL_EVENT_WINDOW_MOVED:
+      case SDL_EVENT_WINDOW_MAXIMIZED:
+      case SDL_EVENT_WINDOW_RESTORED: rememberWindow(); break;
+      case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
       case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED: resize(); break;
       case SDL_EVENT_WINDOW_FOCUS_LOST: input.blur(); break;
       case SDL_EVENT_GAMEPAD_ADDED: input.gamepadAdded(e.gdevice.which); break;
@@ -292,18 +359,28 @@ class App {
       }
       case SDL_EVENT_KEY_UP: input.keyUp(e.key.scancode); break;
       case SDL_EVENT_MOUSE_MOTION:
-        mouseX = e.motion.x;
-        mouseY = e.motion.y;
+        // mouseX/Y em unidades da interface; a câmera usa a posição real da janela
+        mouseX = e.motion.x / uiScale;
+        mouseY = e.motion.y / uiScale;
         if (dragFn) {
           dragFn(mouseX);
           break;
         }
-        if (mode == Mode::Game) game.mouseMove(mouseX, mouseY, (float)cssH);
-        else garage.mouseMove(mouseX, mouseY);
+        if (stripPress) {
+          float dx = mouseX - stripPressX;
+          if (std::fabs(dx) > 6) stripDragged = true;
+          if (stripDragged) {
+            stripTarget = std::clamp(stripPressScroll - dx, 0.f, stripMax);
+            stripScroll = stripTarget;  // acompanha o dedo/mouse sem atraso
+          }
+          break;
+        }
+        if (mode == Mode::Game) game.mouseMove(e.motion.x, e.motion.y, (float)cssH);
+        else garage.mouseMove(e.motion.x, e.motion.y);
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN: {
         usePad = false;
-        float x = e.button.x, y = e.button.y;
+        float x = e.button.x / uiScale, y = e.button.y / uiScale;
         if (cine.active) {
           cine.requestExit();
           swallowClick = true;
@@ -312,10 +389,17 @@ class App {
         if (fade.value > 0.5f) break;  // a tela de transição bloqueia cliques
         if (mode == Mode::Game) {
           if (e.button.button == 1 && game.hudClick(x, y)) break;
-          game.mouseDown(e.button.button, x, y);
+          game.mouseDown(e.button.button, e.button.x, e.button.y);
         } else if (mode == Mode::Garage) {
           pressTarget = hitTest(x, y);
-          if (pressTarget == -100) garage.mouseDown(e.button.button, x, y);
+          if (pressTarget == -100) garage.mouseDown(e.button.button, e.button.x, e.button.y);
+          // pressionou sobre a lista de carros: pode virar um arrasto para os lados
+          if (e.button.button == 1 && !settingsTab && !mapPage && (pressTarget >= 0 || pressTarget == -3)) {
+            stripPress = true;
+            stripDragged = false;
+            stripPressX = x;
+            stripPressScroll = stripTarget;
+          }
           if (pressTarget <= -1000 && e.button.button == 1 && hits[-1000 - pressTarget].drag) {
             dragFn = hits[-1000 - pressTarget].drag;
             dragFn(x);
@@ -325,13 +409,22 @@ class App {
         break;
       }
       case SDL_EVENT_MOUSE_BUTTON_UP: {
-        float x = e.button.x, y = e.button.y;
+        float x = e.button.x / uiScale, y = e.button.y / uiScale;
         game.mouseUp();
         garage.mouseUp();
         dragFn = nullptr;
         if (swallowClick) {
           swallowClick = false;
           break;
+        }
+        // soltou depois de arrastar a lista: não é clique
+        if (stripPress) {
+          stripPress = false;
+          if (stripDragged) {
+            stripDragged = false;
+            pressTarget = -100;
+            break;
+          }
         }
         if (mode == Mode::Garage && e.button.button == 1 && pressTarget != -100 && hitTest(x, y) == pressTarget) click(pressTarget);
         pressTarget = -100;
@@ -342,6 +435,8 @@ class App {
         float dy = -e.wheel.y * 100;  // como o deltaY do navegador
         if (mode == Mode::Game) game.wheel(dy);
         else if (mode == Mode::Garage && settingsTab && settingsPanel.contains(mouseX, mouseY)) settingsScroll += dy * 0.4f;
+        else if (mode == Mode::Garage && !settingsTab && !mapPage && stripMax > 0 && layout().strip.contains(mouseX, mouseY))
+          stripTarget = std::clamp(stripTarget + (dy + e.wheel.x * 100) * 0.6f, 0.f, stripMax);
         else if (mode == Mode::Garage && hitTest(mouseX, mouseY) == -100) garage.wheel(dy);
         break;
       }
@@ -372,7 +467,7 @@ class App {
       glClear(GL_COLOR_BUFFER_BIT);
     }
 
-    ui.begin(fbW, fbH, dpr);
+    ui.begin(fbW, fbH, dpr * uiScale);
     ui.setBackdrop(backdropTex);
     if (!hideHud && (mode == Mode::Game || (mode == Mode::Loading && game.running))) game.drawHud(ui);
     drawGarageUi(dt);
@@ -437,6 +532,17 @@ class App {
         garage.intro = 1;
         garage.camera.position = vec3(std::stof(arg), std::stof(ys), std::stof(zs));
       }
+      else if (op == "press" || op == "release") {
+        // segurar/soltar o botão esquerdo (para testar arrastos): "press 320 600"
+        std::string ys;
+        ss >> ys;
+        SDL_Event d{};
+        d.type = op == "press" ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+        d.button.button = 1;
+        d.button.x = std::stof(arg);
+        d.button.y = std::stof(ys);
+        event(d);
+      }
       else if (op == "move" || op == "click") {
         // coordenadas em px de CSS: "click 320 48"
         std::string ys;
@@ -490,7 +596,18 @@ class App {
   }
 
   // ---------------------------------------------------------------- seleção e carregamento de carro
+  // rola a lista para o card i ficar inteiro na tela, com um pedaço do vizinho aparecendo
+  void scrollToCard(int i) {
+    Layout L = layout();
+    float step = L.cardW + 14, peek = 48;
+    float left = 2 + i * step, right = left + L.cardW;
+    if (right - stripTarget > L.strip.w - (i + 1 < (int)cards.size() ? peek : 0)) stripTarget = right - L.strip.w + (i + 1 < (int)cards.size() ? peek : 0);
+    if (left - stripTarget < (i > 0 ? peek : 0)) stripTarget = left - (i > 0 ? peek : 0);
+    stripTarget = std::clamp(stripTarget, 0.f, stripMax);
+  }
+
   void selectCar(int i) {
+    scrollToCard(i);
     if (loadingCard >= 0 || selectedCard == i) return;
     for (int k = 0; k < (int)cards.size(); k++) cards[k].isSelected = k == i;
     play.disabled = true;
@@ -640,10 +757,11 @@ class App {
     bool narrow, showRatings, showFigures;
     Rect strip;
     float headY;
+    float cardW = 236;
   };
   Layout layout() {
     Layout L;
-    float W = (float)cssW, H = (float)cssH;
+    float W = uiW, H = uiH;
     L.narrow = W <= 900;
     L.pad = L.narrow ? 16.f : 44.f;
     L.infoX = L.pad;
@@ -670,8 +788,14 @@ class App {
       L.strip = {L.pad, bottom - 142, W - L.pad * 2 - actionsW - 32, 142};
     }
     float cw = L.narrow ? 200.f : 236.f, ch = L.narrow ? 116.f : 132.f;
+    // a lista rola na horizontal quando os carros não cabem
+    float contentW = cards.empty() ? 0 : cards.size() * (cw + 14) - 14 + 4;
+    stripMax = std::max(0.f, contentW - L.strip.w);
+    stripTarget = std::clamp(stripTarget, 0.f, stripMax);
+    stripScroll = std::clamp(stripScroll, 0.f, stripMax);
     for (size_t i = 0; i < cards.size(); i++)
-      cards[i].rect = {L.strip.x + 2 + i * (cw + 14), L.strip.y + L.strip.h - 6 - ch, cw, ch};
+      cards[i].rect = {L.strip.x + 2 + i * (cw + 14) - stripScroll, L.strip.y + L.strip.h - 6 - ch, cw, ch};
+    L.cardW = cw;
     L.headY = L.strip.y - 12 - 12;
     return L;
   }
@@ -685,7 +809,7 @@ class App {
     if (mapPage) return -100;
     Layout L = layout();
     for (size_t i = 0; i < cards.size(); i++)
-      if (cards[i].rect.contains(x, y) && cards[i].rect.x + cards[i].rect.w <= L.strip.x + L.strip.w + 2) return (int)i;
+      if (cards[i].rect.contains(x, y) && x >= L.strip.x && x <= L.strip.x + L.strip.w) return (int)i;
     if (play.rect.contains(x, y)) return -1;
     // a faixa de carros recebe o ponteiro (rolagem) mesmo fora dos cards
     if (L.strip.contains(x, y)) return -3;
@@ -879,8 +1003,9 @@ class App {
       }
     }
 
-    // cards
-    ui.pushClip({L.strip.x, L.strip.y - 20, L.strip.w, L.strip.h + 40});
+    // cards (a rolagem desliza suave até o alvo)
+    stripScroll += (stripTarget - stripScroll) * (1 - std::exp(-dt * 12));
+    if (std::fabs(stripTarget - stripScroll) < 0.3f) stripScroll = stripTarget;
     for (size_t i = 0; i < cards.size(); i++) {
       Card& c = cards[i];
       c.hover.set(hover == (int)i ? 1.f : 0.f);
@@ -889,6 +1014,8 @@ class App {
       c.hover.update(dt);
       c.selected.update(dt);
       c.progressOpacity.update(dt);
+    }
+    auto drawCard = [&](Card& c) {
       float lift = std::max(c.hover.value, 0.f) * 3;
       Rect r = c.rect;
       r.y -= lift;
@@ -923,8 +1050,30 @@ class App {
       }
       ui.popClip();
       if (c.selected.value > 0.001f) ui.border(r, INK.withAlpha(c.selected.value), 1.5f);
+    };
+    // onde há carros escondidos, a borda da lista some num degradê de transparência
+    // (fatias com opacidade decrescente: o fundo do estúdio aparece através dos cards)
+    const float fadeW = 80;
+    float fadeR = fadeW * std::clamp((stripMax - stripScroll) / 40, 0.f, 1.f);
+    float fadeL = fadeW * std::clamp(stripScroll / 40, 0.f, 1.f);
+    float top = L.strip.y - 20, hgt = L.strip.h + 40;
+    auto drawSlice = [&](float x0, float x1, float alpha) {
+      if (x1 <= x0 || alpha <= 0.003f) return;
+      ui.pushClip({x0, top, x1 - x0, hgt});
+      ui.pushOpacity(alpha);
+      for (auto& c : cards)
+        if (c.rect.x < x1 && c.rect.x + c.rect.w > x0) drawCard(c);
+      ui.popOpacity();
+      ui.popClip();
+    };
+    drawSlice(L.strip.x + fadeL, L.strip.x + L.strip.w - fadeR, 1);
+    const int N = 16;
+    for (int k = 0; k < N; k++) {
+      // de 0 (borda) a 1: começa a sumir devagar, para o pedaço do próximo carro continuar legível
+      float t = (k + 0.5f) / N, ease = std::sqrt(t);
+      if (fadeL > 0) drawSlice(L.strip.x + fadeL * k / N, L.strip.x + fadeL * (k + 1) / N, ease);
+      if (fadeR > 0) drawSlice(L.strip.x + L.strip.w - fadeR * (k + 1) / N, L.strip.x + L.strip.w - fadeR * k / N, ease);
     }
-    ui.popClip();
 
     // botão (o Cinematic saiu: a cinemática abre o jogo)
     {
@@ -1219,7 +1368,7 @@ class App {
     float H = ui.height();
     float pw = std::min(500.f, ui.width() - L.pad * 2);
     const float rowH = 40, headH = 30, gapS = 18, pad = 28;
-    const int rows = 12, heads = 3;
+    const int rows = 13, heads = 3;
     float contentH = pad + heads * headH + rows * rowH + (heads - 1) * gapS + 20 + 34 + pad;
     float top = L.infoY - 8, maxH = H - top - 24;
     float ph = std::min(contentH, maxH);
@@ -1321,8 +1470,18 @@ class App {
     y += gapS;
     section("TELA");
     {
-      float cy = row("Tela cheia (F11)");
-      toggle(right, cy, settings.fullscreen, [this](bool b) { settings.fullscreen = b; changed(false); });
+      float cy = row("Modo de exibição (F11)");
+      segmented(right, cy, {"TELA CHEIA", "JANELA"}, settings.fullscreen ? 0 : 1, [this](int i) {
+        settings.fullscreen = i == 0;
+        changed(false);
+      });
+      next();
+    }
+    {
+      // em janela também dá para arrastar a borda e deixar do tamanho que quiser
+      float cy = row("Tamanho da janela");
+      segmented(right, cy, {"1280×720", "1600×900", "1920×1080", "MAXIMIZADA"}, settings.fullscreen ? -1 : windowSizeIndex(),
+                [this](int i) { setWindowSize(i); });
       next();
     }
     {
@@ -1352,26 +1511,11 @@ class App {
       float tw = ui.measure(t, bt);
       Rect r{x, y, tw + 28, 34};
       int idx = (int)rowCtls.size();
-      rowCtls.push_back({y + settingsScroll - panel.y, 34, {}, [this] {
-        bool fs = settings.fullscreen;
-        std::string car = settings.lastCar, mp = settings.lastMap;
-        settings = Settings{};
-        settings.fullscreen = fs;
-        settings.lastCar = car;
-        settings.lastMap = mp;
-        changed(false);
-      }});
+      rowCtls.push_back({y + settingsScroll - panel.y, 34, {}, [this] { resetSettings(); }});
       bool hov = r.contains(mouseX, mouseY) || (focusVisible && idx == settingsFocus);
       ui.border(r, hov ? INK : LINE.withAlpha(2.5f), 1);
       ui.text(t, x + 14, y + 11, bt, 12);
-      addHit(r, [this] {
-        bool fs = settings.fullscreen;
-        std::string car = settings.lastCar;
-        settings = Settings{};
-        settings.fullscreen = fs;
-        settings.lastCar = car;
-        changed(false);
-      });
+      addHit(r, [this] { resetSettings(); });
       TextStyle hint{Font::Barlow400, 12, 12 * 0.04f, INK3};
       std::string hs = "Salvo automaticamente";
       ui.text(hs, right - ui.measure(hs, hint), y + 9, hint, 16);
@@ -1471,7 +1615,12 @@ class App {
   std::function<void(float)> dragFn;
   Rect settingsPanel;
   float settingsScroll = 0;
+  // lista de carros: rolagem atual, alvo, máximo e arrasto com o mouse
+  float stripScroll = 0, stripTarget = 0, stripMax = 0;
+  bool stripPress = false, stripDragged = false;
+  float stripPressX = 0, stripPressScroll = 0;
   int fbW = 1, fbH = 1, cssW = 1, cssH = 1;
+  float uiScale = 1, uiW = 1, uiH = 1;  // escala e tamanho da interface (em unidades de 1600×900)
   float dpr = 1;
   float mouseX = -1, mouseY = -1;
   int pressTarget = -100;
@@ -1508,21 +1657,32 @@ class App {
 int main(int argc, char** argv) {
   (void)argc;
   initAssetRoot(argv[0]);
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
+  // sem placa/driver de som o jogo continua, só que mudo
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
+    std::fprintf(stderr, "[audio] som desativado: %s\n", SDL_GetError());
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
-  SDL_Window* window = SDL_CreateWindow("Space Racer", 1600, 900, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_MAXIMIZED);
+  // abre no modo da última sessão: janela com o tamanho/posição salvos (ou maximizada);
+  // a tela cheia é ligada logo depois, em App::applySettings
+  Settings saved;
+  saved.load();
+  SDL_WindowFlags wflags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+  if (saved.windowMax) wflags |= SDL_WINDOW_MAXIMIZED;
+  SDL_Window* window = SDL_CreateWindow("Space Racer", saved.windowW, saved.windowH, wflags);
   if (!window) {
     std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
     return 1;
   }
+  SDL_SetWindowMinimumSize(window, MIN_WINDOW_W, MIN_WINDOW_H);
+  if (saved.windowX >= 0 && saved.windowY >= 0 && !saved.windowMax) SDL_SetWindowPosition(window, saved.windowX, saved.windowY);
   SDL_GLContext ctx = SDL_GL_CreateContext(window);
   if (!ctx) {
     std::fprintf(stderr, "OpenGL 4.1 indisponível: %s\n", SDL_GetError());

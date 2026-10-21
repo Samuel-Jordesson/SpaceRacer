@@ -29,7 +29,7 @@ Vehicle::Vehicle(const CarSpec& s, const Ground* gr, const Geometry* geo)
     w.id = c.id;
     w.front = c.front;
     w.left = c.left;
-    w.driven = !c.front;
+    w.driven = spec.frontDrive ? c.front : !c.front;
     w.motor = c.front && spec.electricFront.present;  // motor elétrico no eixo dianteiro (híbridos AWD)
     w.hardpoint = V3((c.left ? -1 : 1) * track / 2, w.radius - h, c.front ? -a : b);
     w.x0 = axleLoad / w.susp.k;
@@ -90,12 +90,19 @@ double Vehicle::ratio(int g) const {
   return (g < 0 ? gb.reverse : gb.ratios[g - 1]) * gb.finalDrive;
 }
 
-double Vehicle::drivenOmega() const { return (wheels[2].omega + wheels[3].omega) / 2; }
+// engatar ou desengatar do neutro (parado, antes de largar) não é uma troca em movimento
+double Vehicle::shiftDuration(int from, int to) const {
+  return from == 0 || to == 0 ? std::min(spec.gearbox.shiftTime, 0.05) : spec.gearbox.shiftTime;
+}
+
+// rodas ligadas ao motor: FL/FR (0, 1) na tração dianteira, RL/RR (2, 3) na traseira
+int Vehicle::drivenLeft() const { return spec.frontDrive ? 0 : 2; }
+double Vehicle::drivenOmega() const { return (wheels[drivenLeft()].omega + wheels[drivenLeft() + 1].omega) / 2; }
 
 bool Vehicle::shiftUp() {
   if (shift) return false;
   if (gear >= (int)spec.gearbox.ratios.size()) return false;
-  shift = Shift{gear + 1, 0, true};
+  shift = Shift{gear + 1, 0, true, shiftDuration(gear, gear + 1)};
   return true;
 }
 
@@ -108,7 +115,7 @@ bool Vehicle::shiftDown() {
     double rpmAfter = std::fabs(drivenOmega() * ratio(target)) * RPM;
     if (rpmAfter > spec.engine.limiterRpm + 300) { overrevBlocked = 0.6; return false; }
   }
-  shift = Shift{target, 0, false};
+  shift = Shift{target, 0, false, shiftDuration(gear, target)};
   return true;
 }
 
@@ -315,7 +322,7 @@ void Vehicle::drivetrain(double dt, const Controls& input, double brake, double 
       double targetRpm = std::fabs(drivenOmega() * ratio()) * RPM;
       throttle = clamp((targetRpm - rpm) / 600, 0, 1);
     }
-    if (s.t >= gb.shiftTime) { shift.reset(); clutchLocked = gear != 0 && rpm > 1500; }
+    if (s.t >= s.duration) { shift.reset(); clutchLocked = gear != 0 && rpm > 1500; }
   }
 
   // --- embreagem automática (anti-stall / largada)
@@ -323,7 +330,8 @@ void Vehicle::drivetrain(double dt, const Controls& input, double brake, double 
     if (gear == 0) clutchTarget = 0;
     else {
       // a embreagem morde entre a marcha lenta e uma rotação que sobe com o acelerador
-      double lo = es.idleRpm + 100;
+      // com mais acelerador o motorista deixa o giro subir antes de a embreagem morder (evita afogar)
+      double lo = es.idleRpm + 100 + throttle * (es.clutchFullRpm - es.idleRpm) * 0.2;
       double hi = lo + 300 + throttle * (es.clutchFullRpm - lo - 300);
       double win = clamp((rpm - lo) / (hi - lo), 0, 1);
       clutchTarget = clutchLocked && rpm > 1100 ? 1 : win;
@@ -333,8 +341,8 @@ void Vehicle::drivetrain(double dt, const Controls& input, double brake, double 
   clutch += clamp(clutchTarget - clutch, -rate * dt, rate * dt);
 
   // --- controle de tração
-  Wheel& wl = wheels[2];
-  Wheel& wr = wheels[3];
+  Wheel& wl = wheels[drivenLeft()];
+  Wheel& wr = wheels[drivenLeft() + 1];
   double tcTarget = 1;
   if (assists.tc && gear != 0) {
     double k = std::max(wl.contact ? wl.slipRatio * sign(gear) : 0, wr.contact ? wr.slipRatio * sign(gear) : 0);

@@ -66,6 +66,11 @@ void Settings::load() {
     else if (k == "autoQuality") v >> autoQuality;
     else if (k == "fullscreen") v >> fullscreen;
     else if (k == "vsync") v >> vsync;
+    else if (k == "windowW") v >> windowW;
+    else if (k == "windowH") v >> windowH;
+    else if (k == "windowX") v >> windowX;
+    else if (k == "windowY") v >> windowY;
+    else if (k == "windowMax") v >> windowMax;
     else if (k == "volume") v >> volume;
     else if (k == "lastCar") v >> lastCar;
     else if (k == "lastMap") v >> lastMap;
@@ -76,6 +81,8 @@ void Settings::load() {
   ao = std::max(0, std::min(2, ao));
   if (shadow != 1024 && shadow != 2048 && shadow != 4096) shadow = 4096;
   volume = std::fmax(0.f, std::fmin(1.f, volume));
+  windowW = std::max(MIN_WINDOW_W, std::min(7680, windowW));
+  windowH = std::max(MIN_WINDOW_H, std::min(4320, windowH));
   matchPreset();
 }
 
@@ -83,5 +90,6 @@ void Settings::save() const {
   std::ofstream out(path());
   out << "preset=" << preset << "\npixelRatio=" << pixelRatio << "\nmsaa=" << msaa << "\nao=" << ao << "\nbloom=" << bloom
       << "\nshadow=" << shadow << "\nlensFx=" << lensFx << "\nspeedBlur=" << speedBlur << "\nautoQuality=" << autoQuality
-      << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nvolume=" << volume << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\n";
+      << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nwindowW=" << windowW << "\nwindowH=" << windowH
+      << "\nwindowX=" << windowX << "\nwindowY=" << windowY << "\nwindowMax=" << windowMax << "\nvolume=" << volume << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\n";
 }
