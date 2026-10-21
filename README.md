@@ -49,6 +49,8 @@ Pelo console do navegador dá para mexer ao vivo, por exemplo: `game.car.spec.ti
 
 A pasta `cpp/` tem o jogo inteiro em C++20 com OpenGL 4.1 e SDL3, rodando numa janela própria. Ele usa os mesmos assets da raiz (`assets/`, os GLB dos carros) e não precisa de navegador nem de internet para jogar.
 
+Ao abrir, uma tela de abertura toca uma vez: a logo (`logo.svg`) aparece e some em fade sobre fundo preto, depois um texto de apresentação e o ícone (`icone.svg`) com um anel que preenche conforme o carro carrega; quando o carro termina de carregar e o texto já ficou tempo suficiente na tela, tudo funde para a cinemática do carro, que já começa a tocar por trás.
+
 ```bash
 cpp/build.sh       # ou: npm run native
 ./space_racer
@@ -77,7 +79,7 @@ Na garagem, a aba **Configurações** (ao lado de Garagem) ajusta qualidade (Bai
 
 ### Pistas (versão C++)
 
-Na garagem, **PILOTAR** abre a escolha da pista. As opções são a **Pista de teste** (asfalto infinito) e o **Spa-Francorchamps** (`mapas/circuit-de-spa-francorchamps-2022-layout`). **CORRER** (ou Enter) carrega e entra; **VOLTAR** (ou Esc) volta. O jogo lembra a última pista escolhida.
+Na garagem, **PILOTAR** abre a escolha da pista. As opções são a **Pista de teste** (asfalto infinito) e o **Spa-Francorchamps** (`mapas/circuit-de-spa-francorchamps-2022-layout`). **CORRER** (ou Enter) carrega e entra; **VOLTAR** (ou Esc) volta. O jogo lembra a última pista escolhida. Carregar a pista usa a mesma tela preta com texto e o anel de carregamento da abertura, até a pista ficar pronta.
 
 Em Spa, cada superfície tem sua aderência: asfalto 100%, zebra 92%, grama 55%, brita 42% com resistência extra. Muros, barreiras, guard-rails e prédios têm colisão. O carro larga no grid, embaixo do pórtico de semáforos, virado para a La Source. As texturas em alta resolução da pasta `textures/` substituem as reduzidas do GLB, e as que vieram de cabeça para baixo são corrigidas sozinhas.
 

@@ -142,6 +142,10 @@ class App {
   App(SDL_Window* w) : window(w), garage(renderer), game(renderer, input), cine(garage) {
     garage.cine = &cine;
     ui.loadFonts(assetPath("assets/fonts"));
+    bootLogoTex = loadImage("assets/ui/logo.png", false);
+    if (bootLogoTex) { bootLogoTex->repeat = false; bootLogoTex->upload(); }
+    bootIconTex = loadImage("assets/ui/icone.png", false);
+    if (bootIconTex) { bootIconTex->repeat = false; bootIconTex->upload(); }
     for (auto& car : carCatalog()) {
       Card c;
       c.car = &car;
@@ -186,6 +190,7 @@ class App {
     for (int k = 0; k < (int)cards.size(); k++)
       if (cards[k].car->id == settings.lastCar) start = k;
     selectCar(start);
+    startBootIntro();
   }
 
   ~App() {
@@ -640,6 +645,7 @@ class App {
     if (loadingCard < 0) return;
     Card& c = cards[loadingCard];
     c.progress = loadProgress;
+    bootProgress = loadProgress;
     if (!loadDone) return;
     loadThread.join();
     int i = loadingCard;
@@ -649,6 +655,7 @@ class App {
       std::fprintf(stderr, "%s\n", loadError.c_str());
       infoMeta = "Erro ao carregar o modelo: " + loadError;
       introCinematic = false;
+      bootStage = BootStage::Done;  // a abertura não deve esconder o erro
       boot.set(0);
       return;
     }
@@ -669,9 +676,37 @@ class App {
     cineBtn.disabled = false;
     if (introCinematic) {
       introCinematic = false;
-      startCinematic();
-      boot.set(0);
+      bootProgress = 1;
+      bootAssetsReady = true;
+      tryFinishBoot();
     }
+  }
+
+  // tela de abertura: logo (fade in/hold/fade out) → texto + ícone com anel de carregamento.
+  // Cada etapa é agendada com after(); tryFinishBoot() só sai da etapa de texto quando o carro
+  // selecionado já carregou E o texto já ficou visível tempo suficiente para ser lido.
+  void startBootIntro() {
+    bootLogoOpacity.set(1);
+    after(0.9f + 0.9f, [this] {
+      if (bootStage != BootStage::Logo) return;
+      bootLogoOpacity.set(0);
+    });
+    after(0.9f + 0.9f + 0.9f + 0.3f, [this] {
+      if (bootStage != BootStage::Logo) return;
+      bootStage = BootStage::Text;
+      bootTextOpacity.set(1);
+      after(2.2f, [this] {
+        bootTextMinTimeDone = true;
+        tryFinishBoot();
+      });
+    });
+  }
+
+  void tryFinishBoot() {
+    if (bootStage != BootStage::Text || !bootTextMinTimeDone || !bootAssetsReady) return;
+    bootStage = BootStage::Done;
+    startCinematic();
+    boot.set(0);
   }
 
   void showInfo(const CarEntry& car) {
@@ -695,6 +730,7 @@ class App {
     mode = Mode::Loading;
     fade.set(1);
     fadeText = "Preparando " + mp.name + "…";
+    fadeError = false;
     fadeBar.snap(0);
     after(0.45f, [this, &mp] {
       game.beginPrepare(mp);
@@ -711,6 +747,7 @@ class App {
     if (!err.empty()) {
       std::fprintf(stderr, "%s\n", err.c_str());
       fadeText = "Erro ao carregar a pista: " + err;
+      fadeError = true;
       mode = Mode::Garage;
       after(3, [this] { fade.set(0); });
       return;
@@ -730,6 +767,7 @@ class App {
     if (mode != Mode::Game) return;
     mode = Mode::Loading;
     fadeText.clear();
+    fadeError = false;
     fadeBar.snap(0);
     fade.set(1);
     after(0.4f, [this] {
@@ -1547,40 +1585,100 @@ class App {
     ui.popOpacity();
   }
 
+  // anel de carregamento: trilho fino + arco que preenche a partir do topo (12h), sentido horário
+  void drawProgressRing(float cx, float cy, float r, float width, float t, const Color& track, const Color& fill) {
+    ui.ring(cx, cy, r, width, track);
+    t = std::clamp(t, 0.f, 1.f);
+    if (t <= 0.002f) return;
+    float a0 = -(float)M_PI / 2, a1 = a0 + t * 2 * (float)M_PI;
+    int n = std::max(1, (int)std::ceil(72 * t));
+    vec2 prev{cx + std::cos(a0) * r, cy + std::sin(a0) * r};
+    for (int i = 1; i <= n; i++) {
+      float a = a0 + (a1 - a0) * i / n;
+      vec2 p{cx + std::cos(a) * r, cy + std::sin(a) * r};
+      ui.line(prev.x, prev.y, p.x, p.y, width, fill);
+      prev = p;
+    }
+  }
+
   void drawFade(float dt) {
     fade.update(dt);
     fadeBar.update(dt);
     boot.update(dt);
     float W = ui.width(), H = ui.height();
+    // tela preta de transição ao entrar/sair da pista: texto + ícone com o mesmo anel de
+    // carregamento da abertura, preenchendo até completar (ou a mensagem de erro, sozinha)
     if (fade.value > 0.001f) {
       ui.pushOpacity(fade.value);
-      ui.rect({0, 0, W, H}, Color::hex(0xf3f3f2));
-      float bw = std::min(320.f, W * 0.7f), x = (W - bw) / 2;
-      TextStyle st{Font::BC500, 12, 12 * 0.34f, Color::hex(0x6b6e74)};
-      float blockH = 12 + 14 + 2, y = (H - blockH) / 2;
-      if (!fadeText.empty()) {
+      ui.rect({0, 0, W, H}, Color::hex(0x0b0b0c));
+      if (fadeError) {
+        TextStyle st{Font::BC500, 13, 13 * 0.3f, Color(1, 0.55f, 0.52f, 0.9f)};
+        float bw = std::min(420.f, W * 0.78f);
         std::string t = upper(fadeText);
-        ui.text(t, x + (bw - ui.measure(t, st)) / 2, y, st, 12);
+        ui.text(t, (W - std::min(bw, ui.measure(t, st))) / 2, H / 2 - 6, st, 13);
+      } else if (!fadeText.empty()) {
+        TextStyle st{Font::BC500, 13, 13 * 0.3f, Color(1, 1, 1, 0.78f)};
+        std::string t = upper(fadeText);
+        float ringR = 40, ringW = 3, gap = 30;
+        float top = H / 2 - (13 + gap + (ringR + ringW / 2) * 2) / 2;
+        ui.text(t, (W - ui.measure(t, st)) / 2, top, st, 13);
+        float cy = top + 13 + gap + ringR + ringW / 2;
+        drawProgressRing(W / 2, cy, ringR, ringW, fadeBar.value, Color(1, 1, 1, 0.14f), WHITE);
+        if (bootIconTex) {
+          float iw = (ringR - ringW) * 1.1f, ih = iw * bootIconTex->height / bootIconTex->width;
+          ui.imageCover(bootIconTex->id, bootIconTex->width, bootIconTex->height, {W / 2 - iw / 2, cy - ih / 2, iw, ih});
+        }
       }
-      ui.rect({x, y + 12 + 14, bw, 2}, Color(0, 0, 0, 0.08f));
-      ui.rect({x, y + 12 + 14, bw * fadeBar.value, 2}, ACCENT);
       ui.popOpacity();
     }
-    // tela de abertura enquanto tudo carrega
+    // tela de abertura: logo em fade → texto de apresentação + ícone com anel de carregamento
     bootFrames++;
+    bootLogoOpacity.update(dt);
+    bootTextOpacity.update(dt);
+    bootProgressShown += (bootProgress - bootProgressShown) * std::min(1.f, dt * 4);
     if (boot.value > 0.001f) {
       ui.pushOpacity(boot.value);
-      ui.rect({0, 0, W, H}, Color::hex(0xf3f3f2));
-      TextStyle b1{Font::BC700, 15, 15 * 0.32f, INK};
-      TextStyle b2{Font::BC500, 15, 15 * 0.32f, INK3};
-      float w1 = ui.measure("SPACE", b1), w2 = ui.measure("RACER", b2);
-      float x = (W - (w1 + 7.5f + w2)) / 2;
-      ui.text("SPACE", x, H / 2 - 7.5f, b1, 15);
-      ui.text("RACER", x + w1 + 7.5f, H / 2 - 7.5f, b2, 15);
-      if (loadingCard >= 0) {
-        float bw = 160, bx = (W - bw) / 2, by = H / 2 + 26;
-        ui.rect({bx, by, bw, 2}, Color(0, 0, 0, 0.08f));
-        ui.rect({bx, by, bw * cards[loadingCard].progress, 2}, ACCENT);
+      ui.rect({0, 0, W, H}, Color::hex(0x0b0b0c));
+
+      if (bootLogoOpacity.value > 0.001f && bootLogoTex) {
+        ui.pushOpacity(bootLogoOpacity.value);
+        float lw = std::min(460.f, W * 0.52f), lh = lw * bootLogoTex->height / bootLogoTex->width;
+        ui.imageCover(bootLogoTex->id, bootLogoTex->width, bootLogoTex->height, {(W - lw) / 2, (H - lh) / 2, lw, lh});
+        ui.popOpacity();
+      }
+
+      if (bootTextOpacity.value > 0.001f) {
+        ui.pushOpacity(bootTextOpacity.value);
+        TextStyle para{Font::Barlow400, 14, 14 * 0.02f, Color(1, 1, 1, 0.75f)};
+        std::string msg = "Space Racer é um simulador de corrida totalmente gratuito e de código aberto, "
+                           "com física realista e carros licenciados.";
+        float maxW = std::min(440.f, W * 0.78f), lh = ui.lineHeightNormal(para);
+        std::vector<std::string> lines;
+        {
+          std::string cur, word;
+          auto push = [&] {
+            if (word.empty()) return;
+            std::string cand = cur.empty() ? word : cur + " " + word;
+            if (!cur.empty() && ui.measure(cand, para) > maxW) { lines.push_back(cur); cur = word; }
+            else cur = cand;
+            word.clear();
+          };
+          for (char ch : msg) { if (ch == ' ') push(); else word += ch; }
+          push();
+          if (!cur.empty()) lines.push_back(cur);
+        }
+        float ringR = 40, ringW = 3, gap = 40;
+        float textH = lines.size() * lh, ringD = (ringR + ringW / 2) * 2;
+        float top = H / 2 - (textH + gap + ringD) / 2;
+        for (size_t k = 0; k < lines.size(); k++)
+          ui.text(lines[k], (W - ui.measure(lines[k], para)) / 2, top + k * lh, para, lh);
+        float cy = top + textH + gap + ringR + ringW / 2;
+        drawProgressRing(W / 2, cy, ringR, ringW, bootProgressShown, Color(1, 1, 1, 0.14f), WHITE);
+        if (bootIconTex) {
+          float iw = (ringR - ringW) * 1.1f, ih = iw * bootIconTex->height / bootIconTex->width;
+          ui.imageCover(bootIconTex->id, bootIconTex->width, bootIconTex->height, {W / 2 - iw / 2, cy - ih / 2, iw, ih});
+        }
+        ui.popOpacity();
       }
       ui.popOpacity();
     }
@@ -1648,10 +1746,21 @@ class App {
   Transition garageUi{1, 0.5f}, emptyOpacity{1, 0.6f};
   Transition fade{0, 0.4f}, fadeBar{0, 0.2f}, boot{1, 0.6f};
   std::string fadeText;
+  bool fadeError = false;
   bool waitingPrepare = false;
   int bootFrames = 0;
   bool introCinematic = true;
   bool hideHud = false;  // roteiro de teste: fotos sem interface  // ao abrir o jogo, começa pela cinemática
+
+  // ---------------------------------------------------------------- abertura: tela preta com a
+  // logo (entra e sai em fade) → texto de apresentação + ícone com anel de carregamento → funde
+  // para a cinemática, já com o carro carregado por trás.
+  enum class BootStage { Logo, Text, Done };
+  BootStage bootStage = BootStage::Logo;
+  TexturePtr bootLogoTex, bootIconTex;
+  Transition bootLogoOpacity{0, 0.9f}, bootTextOpacity{0, 0.7f};
+  bool bootTextMinTimeDone = false, bootAssetsReady = false;
+  float bootProgress = 0, bootProgressShown = 0;
 };
 
 int main(int argc, char** argv) {
