@@ -338,6 +338,7 @@ class App {
           if (sc == SDL_SCANCODE_LEFT) adjustFocus(-1);
           if (sc == SDL_SCANCODE_RIGHT) adjustFocus(1);
           if ((sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_SPACE) && !e.key.repeat) activateFocus();
+          if (sc == SDL_SCANCODE_R && !e.key.repeat) resetSettings();
           break;
         }
         if (mode == Mode::Garage && !e.key.repeat && mapPage) {
@@ -1276,6 +1277,7 @@ class App {
       if (b == SDL_GAMEPAD_BUTTON_DPAD_LEFT) adjustFocus(-1);
       if (b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT) adjustFocus(1);
       if (b == SDL_GAMEPAD_BUTTON_SOUTH) activateFocus();
+      if (b == SDL_GAMEPAD_BUTTON_NORTH) resetSettings();
       if (b == SDL_GAMEPAD_BUTTON_EAST) setTab(false);
       return;
     }
@@ -1293,11 +1295,18 @@ class App {
     if (b == SDL_GAMEPAD_BUTTON_SOUTH || b == SDL_GAMEPAD_BUTTON_START) startPlay();
   }
 
-  // foco das linhas das configurações (controle e setas do teclado)
+  // foco das linhas das configurações (controle e setas do teclado); passar do topo/fim da
+  // lista troca de categoria (só há Gráficos e Áudio) e entra pela primeira linha dela
   void moveFocus(int d) {
     int n = (int)rowCtls.size();
     if (!n) return;
-    settingsFocus = std::max(0, std::min(n - 1, settingsFocus + d));
+    int nf = settingsFocus + d;
+    if (nf < 0 || nf >= n) {
+      settingsCategory = 1 - settingsCategory;
+      settingsFocus = 0;
+    } else {
+      settingsFocus = nf;
+    }
     focusVisible = true;
   }
   void adjustFocus(int d) {
@@ -1337,250 +1346,271 @@ class App {
     applySettings();
   }
 
-  // controle segmentado alinhado à direita em (right, cy); devolve a largura
-  float segmented(float right, float cy, const std::vector<std::string>& opts, int selected, const std::function<void(int)>& onSelect) {
-    TextStyle st{Font::BC600, 11, 11 * 0.14f, INK2};
-    std::vector<float> ws;
-    float total = 0;
-    for (auto& o : opts) {
-      ws.push_back(ui.measure(o, st) + 22);
-      total += ws.back();
-    }
-    float x = right - total, h = 26, y = cy - h / 2;
-    ui.border({x, y, total, h}, LINE.withAlpha(1.6f), 1);
-    for (size_t i = 0; i < opts.size(); i++) {
-      Rect r{x, y, ws[i], h};
-      bool sel = (int)i == selected, hov = r.contains(mouseX, mouseY);
-      if (sel) ui.rect(r, INK);
-      else if (hov) ui.rect(r, Color(17 / 255.f, 18 / 255.f, 20 / 255.f, 0.06f));
-      st.color = sel ? WHITE : hov ? INK : INK2;
-      ui.text(opts[i], x + 11, y + 7.5f, st, 11);
-      if (!sel) addHit(r, [onSelect, i] { onSelect((int)i); });
-      x += ws[i];
-    }
-    if (!rowCtls.empty()) {
-      int n = (int)opts.size();
-      rowCtls.back().adjust = [onSelect, selected, n](int d) {
-        int nx = selected < 0 ? (d > 0 ? 0 : n - 1) : std::max(0, std::min(n - 1, selected + d));
-        if (nx != selected) onSelect(nx);
-      };
-    }
-    return total;
-  }
-
-  void toggle(float right, float cy, bool on, const std::function<void(bool)>& onChange) {
-    Rect r{right - 38, cy - 10, 38, 20};
-    bool hov = r.contains(mouseX, mouseY);
-    ui.rect(r, on ? (hov ? mix(INK, ACCENT, 0.35f) : INK) : Color(17 / 255.f, 18 / 255.f, 20 / 255.f, hov ? 0.22f : 0.15f), 10);
-    ui.circle(on ? r.x + r.w - 10 : r.x + 10, cy, 8, WHITE);
-    TextStyle st{Font::BC600, 11, 11 * 0.14f, INK3};
-    std::string t = on ? "SIM" : "NÃO";
-    ui.text(t, r.x - 10 - ui.measure(t, st), cy - 5.5f, st, 11);
-    addHit({r.x - 40, r.y - 4, r.w + 44, r.h + 8}, [onChange, on] { onChange(!on); });
-    if (!rowCtls.empty()) {
-      rowCtls.back().adjust = [onChange, on](int d) { if ((d > 0) != on) onChange(d > 0); };
-      rowCtls.back().activate = [onChange, on] { onChange(!on); };
+  // ícones de linha simples, em vetor, na cor c (s = tamanho do lado)
+  void settingsIcon(int kind, float cx, float cy, float s, const Color& c) {
+    if (kind == 0) {  // monitor (Gráficos)
+      float w = s, h = s * 0.72f;
+      ui.border({cx - w / 2, cy - h / 2 - s * 0.06f, w, h}, c, std::max(1.3f, s * 0.09f), s * 0.1f);
+      ui.rect({cx - s * 0.22f, cy + h / 2 - s * 0.05f, s * 0.44f, s * 0.07f}, c, s * 0.03f);
+    } else {  // equalizador (Áudio)
+      float bw = s * 0.16f, gap = s * 0.14f;
+      float hs[3] = {s * 0.34f, s * 0.64f, s * 0.46f};
+      float x0 = cx - (bw * 3 + gap * 2) / 2;
+      for (int i = 0; i < 3; i++) ui.rect({x0 + i * (bw + gap), cy + s * 0.34f - hs[i], bw, hs[i]}, c, bw * 0.3f);
     }
   }
 
-  // slider 0..1 com o valor escrito ao lado
-  void slider(float right, float cy, float v, const std::string& label, const std::function<void(float)>& onChange) {
-    TextStyle vs{Font::Barlow600, 12, 0, INK, true};
-    float valW = 44, w = 170;
-    Rect track{right - valW - w, cy - 1, w, 2};
-    ui.rect(track, LINE.withAlpha(1.4f));
-    ui.rect({track.x, track.y, track.w * v, 2}, INK);
-    Rect knob{track.x + track.w * v - 7, cy - 7, 14, 14};
-    bool hov = Rect{track.x - 8, cy - 12, w + 16, 24}.contains(mouseX, mouseY) || dragFn;
-    ui.circle(knob.x + 7, cy, hov ? 7.f : 6.f, INK);
-    ui.text(label, right - ui.measure(label, vs), cy - 8, vs, 16);
-    float tx = track.x, tw = track.w;
-    addHit({track.x - 8, cy - 12, w + 16, 24}, {}, [onChange, tx, tw](float mx) { onChange(std::fmax(0.f, std::fmin(1.f, (mx - tx) / tw))); });
-    if (!rowCtls.empty()) rowCtls.back().adjust = [onChange, v](int d) { onChange(std::fmax(0.f, std::fmin(1.f, v + d * 0.05f))); };
+  // linha "< valor >" no estilo do menu: rótulo à esquerda, valor com setas à direita.
+  // onAdjust(d) recebe −1 (seta/D-pad esquerda) ou +1 (direita); registra o foco em rowCtls.
+  void settingRow(float x, float right, float& y, const std::string& label, const std::string& value, const std::string& desc,
+                  const std::function<void(int)>& onAdjust, bool enabled = true) {
+    const float rowH = 44;
+    Rect rowRect{x - 14, y, right - x + 28, rowH};
+    bool hov = enabled && rowRect.contains(mouseX, mouseY);
+    int idx = (int)rowCtls.size();
+    bool focused = focusVisible && idx == settingsFocus;
+    if (hov || focused) {
+      ui.rect(rowRect, Color(1, 1, 1, focused ? 0.09f : 0.05f), 6);
+      if (focused) ui.rect({rowRect.x, rowRect.y, 3, rowRect.h}, ACCENT, 2);
+    }
+    rowCtls.push_back({y + settingsScroll - settingsContentTop, rowH, onAdjust, [onAdjust] { onAdjust(1); }, label, desc, hov});
+    float cy = y + rowH / 2;
+    TextStyle lab{Font::Barlow400, 14, 0, Color(1, 1, 1, enabled ? 0.9f : 0.35f)};
+    ui.text(label, x, cy - ui.lineHeightNormal(lab) / 2, lab);
+    TextStyle vs{Font::BC600, 13, 13 * 0.04f, Color(1, 1, 1, enabled ? 1.f : 0.35f), true};
+    float chev = 22, valueW = std::max(64.f, ui.measure(value, vs) + 8), blockW = chev * 2 + valueW;
+    float bx = right - blockW;
+    auto arrow = [&](float ax, bool pointRight) {
+      Rect ar{ax, cy - chev / 2, chev, chev};
+      bool ahov = enabled && ar.contains(mouseX, mouseY);
+      Color c = !enabled ? Color(1, 1, 1, 0.15f) : ahov ? WHITE : Color(1, 1, 1, 0.55f);
+      float s = chev * 0.3f, mx = ax + chev / 2, dir = pointRight ? 1.f : -1.f;
+      ui.triangle({mx + s * 0.5f * dir, cy}, {mx - s * 0.5f * dir, cy - s}, {mx - s * 0.5f * dir, cy + s}, c);
+      if (enabled) addHit(ar, [onAdjust, pointRight] { onAdjust(pointRight ? 1 : -1); });
+    };
+    arrow(bx, false);
+    float vw = ui.measure(value, vs);
+    ui.text(value, bx + chev + (valueW - vw) / 2, cy - ui.lineHeightNormal(vs) / 2, vs);
+    arrow(bx + chev + valueW, true);
+    y += rowH;
+  }
+
+  // divisor fino entre grupos de opções
+  void settingsDivider(float x, float right, float& y) {
+    ui.rect({x, y + 8, right - x, 1}, Color(1, 1, 1, 0.08f));
+    y += 24;
+  }
+
+  // avança/recua um índice entre 0..n−1, dando a volta; −1 (personalizado) entra por uma ponta
+  static int cycleIndex(int cur, int d, int n) {
+    if (cur < 0) return d > 0 ? 0 : n - 1;
+    return ((cur + d) % n + n) % n;
   }
 
   void drawSettings(float dt, const Layout& L) {
     (void)dt;
     rowCtls.clear();
     float k = INFO_EASE(tabT.value);
-    float H = ui.height();
-    float pw = std::min(500.f, ui.width() - L.pad * 2);
-    const float rowH = 40, headH = 30, gapS = 18, pad = 28;
-    const int rows = 13, heads = 3;
-    float contentH = pad + heads * headH + rows * rowH + (heads - 1) * gapS + 20 + 34 + pad;
-    float top = L.infoY - 8, maxH = H - top - 24;
-    float ph = std::min(contentH, maxH);
-    settingsScroll = std::fmax(0.f, std::fmin(settingsScroll, contentH - ph));
-    Rect panel{L.pad - 16 * (1 - k), top, pw, ph};
+    float top = L.narrow ? 72.f : 86.f, bottomReserve = L.narrow ? 46.f : 56.f;
+    Rect panel{L.pad - 16 * (1 - k), top, uiW - L.pad * 2, uiH - top - bottomReserve};
     settingsPanel = panel;
+    settingsScroll = std::fmax(0.f, std::fmin(settingsScroll, std::fmax(0.f, settingsContentH[settingsCategory] - panel.h)));
     ui.pushOpacity(tabT.value);
-    ui.shadow(panel, Color(0, 0, 0, 0.18f), 0, 14, 30, -18);
-    ui.blurPanel(panel, Color(1, 1, 1, 0.78f));
+    ui.shadow(panel, Color(0, 0, 0, 0.32f), 0, 18, 40, -8);
+    ui.blurPanel(panel, Color(0.035f, 0.04f, 0.045f, 0.88f), 14);
     ui.pushClip(panel);
-    float x = panel.x + pad, right = panel.x + pw - pad, y = panel.y + pad - settingsScroll;
-    TextStyle head{Font::BC600, 12, 12 * 0.3f, INK};
-    TextStyle lab{Font::Barlow400, 12, 12 * 0.06f, INK2};
-    float llh = ui.lineHeightNormal(lab);
-    auto section = [&](const char* t) {
-      ui.text(t, x, y, head, 12);
-      ui.rect({x, y + 20, right - x, 1}, LINE);
-      y += headH;
-    };
-    auto row = [&](const std::string& label) {
-      int idx = (int)rowCtls.size();
-      rowCtls.push_back({y + settingsScroll - panel.y, rowH, {}, {}});
-      if (focusVisible && idx == settingsFocus) {
-        ui.rect({x - 14, y + 2, right - x + 28, rowH - 4}, Color(17 / 255.f, 18 / 255.f, 20 / 255.f, 0.06f));
-        ui.rect({x - 14, y + 2, 3, rowH - 4}, ACCENT);
-      }
-      ui.text(upper(label), x, y + (rowH - llh) / 2, lab, llh);
-      return y + rowH / 2;
-    };
-    auto next = [&] { y += rowH; };
 
-    section("GRÁFICOS");
-    {
-      float cy = row(settings.preset < 0 ? "Qualidade · personalizada" : "Qualidade");
-      segmented(right, cy, {"BAIXO", "MÉDIO", "ALTO", "ULTRA"}, settings.preset, [this](int i) {
-        settings.applyPreset(i);
-        changed(false);
-      });
-      next();
+    // --- barra lateral de categorias
+    struct Cat { const char* label, *desc; int icon; };
+    static const Cat cats[2] = {
+        {"GRÁFICOS", "Qualidade visual, resolução e desempenho.", 0},
+        {"ÁUDIO", "Volume do motor, dos pneus e do ambiente.", 1},
+    };
+    float sideW = L.narrow ? 158.f : 226.f, rightW = L.narrow ? 0.f : 270.f;
+    float sy = panel.y + 22;
+    for (int i = 0; i < 2; i++) {
+      bool active = settingsCategory == i;
+      Rect r{panel.x, sy, sideW, 46};
+      bool hov = r.contains(mouseX, mouseY);
+      if (active) {
+        ui.rect(r, Color(1, 1, 1, 0.08f));
+        ui.rect({panel.x, r.y, 3, r.h}, ACCENT);
+      } else if (hov) {
+        ui.rect(r, Color(1, 1, 1, 0.04f));
+      }
+      Color fg = active ? WHITE : hov ? Color(1, 1, 1, 0.85f) : Color(1, 1, 1, 0.45f);
+      settingsIcon(cats[i].icon, panel.x + 27, r.y + r.h / 2, 20, fg);
+      TextStyle ns{Font::BC600, 13, 13 * 0.18f, fg};
+      ui.text(cats[i].label, panel.x + 52, r.y + r.h / 2 - 6.5f, ns, 13);
+      if (!active) addHit(r, [this, i] { settingsCategory = i; settingsFocus = 0; });
+      sy += 46 + 4;
     }
-    {
-      float cy = row("Resolução");
-      char buf[16];
-      std::snprintf(buf, sizeof buf, "%d%%", (int)std::lround(settings.pixelRatio * 100));
-      slider(right, cy, (settings.pixelRatio - 0.5f) / 1.5f, buf, [this](float v) {
-        float pr = std::round((0.5f + v * 1.5f) * 20) / 20;  // passos de 5%
-        if (std::fabs(pr - settings.pixelRatio) < 0.001f) return;
-        settings.pixelRatio = pr;
-        changed();
-      });
-      next();
-    }
-    {
-      float cy = row("Anti-serrilhado");
-      int sel = settings.msaa == 0 ? 0 : settings.msaa == 2 ? 1 : 2;
-      segmented(right, cy, {"FXAA", "MSAA 2×", "MSAA 4×"}, sel, [this](int i) {
-        settings.msaa = i == 0 ? 0 : i == 1 ? 2 : 4;
-        changed();
-      });
-      next();
-    }
-    {
-      float cy = row("Oclusão de ambiente");
-      segmented(right, cy, {"DESLIGADA", "NORMAL", "ALTA"}, settings.ao, [this](int i) {
-        settings.ao = i;
-        changed();
-      });
-      next();
-    }
-    {
-      float cy = row("Sombras");
-      int sel = settings.shadow == 1024 ? 0 : settings.shadow == 2048 ? 1 : 2;
-      segmented(right, cy, {"BAIXA", "MÉDIA", "ALTA"}, sel, [this](int i) {
-        settings.shadow = i == 0 ? 1024 : i == 1 ? 2048 : 4096;
-        changed();
-      });
-      next();
-    }
-    {
-      float cy = row("Brilho (bloom)");
-      toggle(right, cy, settings.bloom, [this](bool b) { settings.bloom = b; changed(); });
-      next();
-    }
-    {
-      float cy = row("Efeitos de lente");
-      toggle(right, cy, settings.lensFx, [this](bool b) { settings.lensFx = b; changed(false); });
-      next();
-    }
-    {
-      float cy = row("Desfoque de velocidade");
-      toggle(right, cy, settings.speedBlur, [this](bool b) { settings.speedBlur = b; changed(false); });
-      next();
-    }
-    {
-      float cy = row("Qualidade automática");
-      toggle(right, cy, settings.autoQuality, [this](bool b) { settings.autoQuality = b; changed(false); });
-      next();
-    }
-    y += gapS;
-    section("TELA");
-    {
-      float cy = row("Modo de exibição (F11)");
-      segmented(right, cy, {"TELA CHEIA", "JANELA"}, settings.fullscreen ? 0 : 1, [this](int i) {
-        settings.fullscreen = i == 0;
-        changed(false);
-      });
-      next();
-    }
-    {
-      // em janela também dá para arrastar a borda e deixar do tamanho que quiser
-      float cy = row("Tamanho da janela");
-      segmented(right, cy, {"1280×720", "1600×900", "1920×1080", "MAXIMIZADA"}, settings.fullscreen ? -1 : windowSizeIndex(),
-                [this](int i) { setWindowSize(i); });
-      next();
-    }
-    {
-      float cy = row("Sincronia vertical (VSync)");
-      toggle(right, cy, settings.vsync, [this](bool b) { settings.vsync = b; changed(false); });
-      next();
-    }
-    y += gapS;
-    section("SOM");
-    {
-      float cy = row("Volume");
+    ui.rect({panel.x + sideW, panel.y + 18, 1, panel.h - 36}, Color(1, 1, 1, 0.08f));
+
+    // --- cabeçalho do conteúdo
+    float x = panel.x + sideW + 32, right = panel.x + panel.w - 28 - (rightW > 0 ? rightW + 28 : 0);
+    if (rightW > 0) ui.rect({right + 28, panel.y + 18, 1, panel.h - 36}, Color(1, 1, 1, 0.08f));
+    ui.pushClip({panel.x + sideW + 1, panel.y, panel.w - sideW - 1, panel.h});
+    float y = panel.y + 24 - settingsScroll;
+    settingsContentTop = panel.y;
+    TextStyle catTitle{Font::BC600, 20, 20 * 0.06f, WHITE};
+    TextStyle catSub{Font::Barlow400, 13, 0, Color(1, 1, 1, 0.45f)};
+    ui.text(cats[settingsCategory].label, x, y, catTitle, 20);
+    y += 20 + 8;
+    ui.text(cats[settingsCategory].desc, x, y, catSub, 16);
+    y += 16 + 18;
+    settingsDivider(x, right, y);
+
+    // --- linhas de cada categoria
+    if (settingsCategory == 0) {
+      const char* presetNames[4] = {"Baixo", "Médio", "Alto", "Ultra"};
+      settingRow(x, right, y, "Preset de qualidade", settings.preset < 0 ? "Personalizada" : presetNames[settings.preset],
+                 "Define automaticamente as melhores configurações gráficas para o seu computador.", [this](int d) {
+                   settings.applyPreset(cycleIndex(settings.preset, d, 4));
+                   changed(false);
+                 });
+      {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%d%%", (int)std::lround(settings.pixelRatio * 100));
+        settingRow(x, right, y, "Resolução de renderização", buf,
+                   "Resolução interna em relação ao tamanho da janela. Valores menores melhoram o desempenho.", [this](int d) {
+                     settings.pixelRatio = std::fmax(0.5f, std::fmin(2.f, settings.pixelRatio + d * 0.05f));
+                     changed();
+                   });
+      }
+      settingRow(x, right, y, "Modo de exibição", settings.fullscreen ? "Tela cheia" : "Janela",
+                 "Alterna entre tela cheia e janela (tecla F11).", [this](int) {
+                   settings.fullscreen = !settings.fullscreen;
+                   changed(false);
+                 });
+      {
+        const char* winNames[4] = {"1280 × 720", "1600 × 900", "1920 × 1080", "Maximizada"};
+        int idx = windowSizeIndex();
+        char buf[24];
+        std::string val;
+        if (idx >= 0) val = winNames[idx];
+        else {
+          std::snprintf(buf, sizeof buf, "%d × %d", settings.windowW, settings.windowH);
+          val = buf;
+        }
+        settingRow(x, right, y, "Tamanho da janela", val,
+                   "Tamanho da janela fora da tela cheia. A borda também pode ser arrastada com o mouse.",
+                   [this](int d) { setWindowSize(cycleIndex(windowSizeIndex(), d, 4)); }, !settings.fullscreen);
+      }
+      settingRow(x, right, y, "Sincronia vertical", settings.vsync ? "Ligada" : "Desligada",
+                 "Sincroniza os quadros com a tela para evitar o corte horizontal da imagem (tearing).",
+                 [this](int) { settings.vsync = !settings.vsync; changed(false); });
+      settingsDivider(x, right, y);
+      {
+        const char* aaNames[3] = {"FXAA", "MSAA 2×", "MSAA 4×"};
+        int sel = settings.msaa == 0 ? 0 : settings.msaa == 2 ? 1 : 2;
+        settingRow(x, right, y, "Anti-serrilhado", aaNames[sel],
+                   "Suaviza as bordas serrilhadas. O MSAA tem mais qualidade, mas custa mais desempenho.", [this](int d) {
+                     int sel2 = cycleIndex(settings.msaa == 0 ? 0 : settings.msaa == 2 ? 1 : 2, d, 3);
+                     settings.msaa = sel2 == 0 ? 0 : sel2 == 1 ? 2 : 4;
+                     changed();
+                   });
+      }
+      {
+        const char* aoNames[3] = {"Desligada", "Normal", "Alta"};
+        settingRow(x, right, y, "Oclusão de ambiente", aoNames[settings.ao],
+                   "Sombreamento de contato entre superfícies próximas, para mais profundidade.",
+                   [this](int d) { settings.ao = cycleIndex(settings.ao, d, 3); changed(); });
+      }
+      {
+        const char* shNames[3] = {"Baixa", "Média", "Alta"};
+        int sel = settings.shadow == 1024 ? 0 : settings.shadow == 2048 ? 1 : 2;
+        settingRow(x, right, y, "Sombras", shNames[sel], "Resolução do mapa de sombra projetada pelo sol.", [this, sel](int d) {
+          int sel2 = cycleIndex(sel, d, 3);
+          settings.shadow = sel2 == 0 ? 1024 : sel2 == 1 ? 2048 : 4096;
+          changed();
+        });
+      }
+      settingRow(x, right, y, "Brilho (bloom)", settings.bloom ? "Ligado" : "Desligado", "Brilho ao redor das luzes e dos reflexos fortes.",
+                 [this](int) { settings.bloom = !settings.bloom; changed(); });
+      settingRow(x, right, y, "Efeitos de lente", settings.lensFx ? "Ligado" : "Desligado",
+                 "Vinheta, grão de filme e aberração cromática nas bordas da tela.",
+                 [this](int) { settings.lensFx = !settings.lensFx; changed(false); });
+      settingRow(x, right, y, "Desfoque de velocidade", settings.speedBlur ? "Ligado" : "Desligado",
+                 "Desfoque radial nas bordas da tela em alta velocidade.",
+                 [this](int) { settings.speedBlur = !settings.speedBlur; changed(false); });
+      settingRow(x, right, y, "Qualidade automática", settings.autoQuality ? "Ligada" : "Desligada",
+                 "Reduz a qualidade gráfica sozinha se os quadros por segundo ficarem baixos.",
+                 [this](int) { settings.autoQuality = !settings.autoQuality; changed(false); });
+    } else {
       char buf[16];
       std::snprintf(buf, sizeof buf, "%d%%", (int)std::lround(settings.volume * 100));
-      slider(right, cy, settings.volume, buf, [this](float v) {
-        float vol = std::round(v * 100) / 100;
-        if (std::fabs(vol - settings.volume) < 0.001f) return;
-        settings.volume = vol;
+      settingRow(x, right, y, "Volume", buf, "Volume geral do motor, dos pneus e do ambiente.", [this](int d) {
+        settings.volume = std::fmax(0.f, std::fmin(1.f, settings.volume + d * 0.05f));
         changed(false);
       });
-      next();
     }
-    // rodapé: restaurar padrão + aviso de salvamento
-    y += 20;
-    {
-      TextStyle bt{Font::BC600, 12, 12 * 0.26f, INK};
-      std::string t = "RESTAURAR PADRÃO";
-      float tw = ui.measure(t, bt);
-      Rect r{x, y, tw + 28, 34};
-      int idx = (int)rowCtls.size();
-      rowCtls.push_back({y + settingsScroll - panel.y, 34, {}, [this] { resetSettings(); }});
-      bool hov = r.contains(mouseX, mouseY) || (focusVisible && idx == settingsFocus);
-      ui.border(r, hov ? INK : LINE.withAlpha(2.5f), 1);
-      ui.text(t, x + 14, y + 11, bt, 12);
-      addHit(r, [this] { resetSettings(); });
-      TextStyle hint{Font::Barlow400, 12, 12 * 0.04f, INK3};
-      std::string hs = "Salvo automaticamente";
-      ui.text(hs, right - ui.measure(hs, hint), y + 9, hint, 16);
-    }
+    settingsContentH[settingsCategory] = y - panel.y + 24;
     ui.popClip();
+
+    // --- painel de descrição à direita (linha com foco ou sob o mouse)
+    if (rightW > 0 && !rowCtls.empty()) {
+      int active = -1;
+      for (size_t i = 0; i < rowCtls.size(); i++)
+        if (rowCtls[i].hovered) { active = (int)i; break; }
+      if (active < 0 && focusVisible && settingsFocus < (int)rowCtls.size()) active = settingsFocus;
+      if (active < 0) active = 0;
+      const RowCtl& r = rowCtls[active];
+      float rx = right + 56, ry = panel.y + 30, rw = rightW - 28;
+      settingsIcon(cats[settingsCategory].icon, rx + 18, ry + 18, 36, Color(1, 1, 1, 0.55f));
+      ry += 54;
+      TextStyle rh{Font::BC600, 15, 15 * 0.1f, WHITE};
+      ui.text(upper(r.label), rx, ry, rh, 15);
+      ry += 15 + 12;
+      TextStyle rd{Font::Barlow400, 13, 0, Color(1, 1, 1, 0.55f)};
+      float rdlh = ui.lineHeightNormal(rd);
+      std::string cur, word;
+      auto flush = [&] {
+        if (word.empty()) return;
+        std::string cand = cur.empty() ? word : cur + " " + word;
+        if (!cur.empty() && ui.measure(cand, rd) > rw) {
+          ui.text(cur, rx, ry, rd, rdlh);
+          ry += rdlh;
+          cur = word;
+        } else {
+          cur = cand;
+        }
+        word.clear();
+      };
+      for (char c : r.desc) {
+        if (c == ' ') flush();
+        else word += c;
+      }
+      flush();
+      if (!cur.empty()) ui.text(cur, rx, ry, rd, rdlh);
+    }
+
     // mantém a linha em foco visível
     if (focusVisible && settingsFocus < (int)rowCtls.size()) {
       float fy = rowCtls[settingsFocus].y, fh = rowCtls[settingsFocus].h;
-      if (fy - settingsScroll < pad) settingsScroll = std::max(0.f, fy - pad);
-      if (fy + fh - settingsScroll > ph - pad) settingsScroll = fy + fh - ph + pad;
+      if (fy - settingsScroll < 0) settingsScroll = std::max(0.f, fy);
+      if (fy + fh - settingsScroll > panel.h) settingsScroll = fy + fh - panel.h;
     }
-    // dica dos controles na base do painel
-    if (promptStyle() != PadStyle::Keyboard) {
+    // barra de rolagem quando o conteúdo não cabe
+    if (settingsContentH[settingsCategory] > panel.h + 1) {
+      float ch = settingsContentH[settingsCategory];
+      float bh = panel.h * panel.h / ch, by = panel.y + (panel.h - bh) * settingsScroll / (ch - panel.h);
+      ui.rect({panel.x + panel.w - 6, by + 6, 3, bh - 12}, Color(1, 1, 1, 0.18f), 1.5f);
+    }
+    ui.popClip();
+
+    // --- rodapé fixo: Voltar e Restaurar padrão (teclado ou controle)
+    {
       PadStyle ps = promptStyle();
-      TextStyle hs{Font::Barlow400, 12, 12 * 0.04f, INK3};
-      float hx = panel.x + 4, hy = panel.y + ph + 18;
-      hx += drawPrompt(ui, ps, PadButton::DPadV, hx, hy, 16, "") + 6;
-      hx += ui.text("Escolher", hx, hy - 8, hs, 16) + 16;
-      hx += drawPrompt(ui, ps, PadButton::DPadH, hx, hy, 16, "") + 6;
-      hx += ui.text("Ajustar", hx, hy - 8, hs, 16) + 16;
-      hx += drawPrompt(ui, ps, PadButton::Back, hx, hy, 18, "") + 6;
-      ui.text("Voltar", hx, hy - 8, hs, 16);
-    }
-    // barra de rolagem quando o painel não cabe
-    if (contentH > ph + 1) {
-      float bh = ph * ph / contentH, by = panel.y + (ph - bh) * settingsScroll / (contentH - ph);
-      ui.rect({panel.x + pw - 5, by + 4, 3, bh - 8}, Color(0, 0, 0, 0.18f), 1.5f);
+      TextStyle hs{Font::Barlow400, 13, 0, Color(1, 1, 1, 0.5f)};
+      float fy = panel.y + panel.h + bottomReserve / 2 + 2;
+      float hx = panel.x + 6;
+      hx += drawPrompt(ui, ps, PadButton::Back, hx, fy, 22.f, "Esc", {true}) + 8;
+      hx += ui.text("Voltar", hx, fy - 8, hs, 16) + 28;
+      float resetX0 = hx;
+      hx += drawPrompt(ui, ps, PadButton::North, hx, fy, 22.f, "R", {true}) + 8;
+      hx += ui.text("Restaurar padrão", hx, fy - 8, hs, 16);
+      addHit({resetX0 - 6, fy - 16, hx - resetX0 + 12, 32}, [this] { resetSettings(); });
     }
     ui.popOpacity();
   }
@@ -1703,9 +1733,13 @@ class App {
     float y, h;  // posição no conteúdo do painel
     std::function<void(int)> adjust;
     std::function<void()> activate;
+    std::string label, desc;  // para o painel de descrição à direita
+    bool hovered = false;
   };
   std::vector<RowCtl> rowCtls;
   int settingsFocus = 0;
+  int settingsCategory = 0;  // 0 = Gráficos, 1 = Áudio
+  float settingsContentH[2] = {0, 0}, settingsContentTop = 0;
   bool focusVisible = false;
   Transition tabAnim[2] = {Transition(1, 0.2f), Transition(0, 0.2f)};
   Transition tabT{0, 0.35f};
