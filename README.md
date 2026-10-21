@@ -45,6 +45,42 @@ Para adicionar uma pista depois, troque o `FlatGround` por um objeto com os mét
 
 Pelo console do navegador dá para mexer ao vivo, por exemplo: `game.car.spec.tire.mu = 1.4`.
 
+## Versão nativa (C++)
+
+A pasta `cpp/` tem o jogo inteiro em C++20 com OpenGL 4.1 e SDL3, rodando numa janela própria. Ele usa os mesmos assets da raiz (`assets/`, os GLB dos carros) e não precisa de navegador nem de internet para jogar.
+
+```bash
+cpp/build.sh       # ou: npm run native
+./space_racer
+```
+
+O `build.sh` usa o CMake do sistema e, se não houver, baixa um CMake portátil para `cpp/.tools`. O SDL3 vem do sistema (`libsdl3-dev`) ou é baixado pelo CMake. Na primeira compilação é preciso internet. `./sr_physics_test` roda os mesmos testes de `npm test` e dá os mesmos números da versão JS. **F11** alterna a tela cheia. O resto dos controles é igual.
+
+**Controles de videogame:** Xbox, PlayStation e controles genéricos funcionam no jogo todo, e os ícones das dicas trocam sozinhos para o aparelho em uso. Nos menus: direcional ou analógico para escolher, A/✕ para confirmar, B/○ para voltar e LB/RB (L1/R1) para trocar de aba. Na pista: RT/LT acelera e freia, o analógico esterça, A/✕ é o freio de mão, RB/LB troca de marcha, Y/△ troca a câmera, Start/Options reposiciona o carro, ↑ mostra a ajuda e View/Share volta para a garagem.
+
+Na garagem, a aba **Configurações** (ao lado de Garagem) ajusta qualidade (Baixo a Ultra), resolução, anti-serrilhado, oclusão de ambiente, sombras, bloom, efeitos de lente, desfoque de velocidade, qualidade automática, tela cheia, VSync e volume. As mudanças aparecem na hora e ficam salvas em `~/.local/share/SpaceRacer/SpaceRacer/settings.ini`.
+
+| JS | C++ |
+|---|---|
+| `js/physics/*` | `cpp/src/physics/*`, port linha a linha em `double`, cerca de 12× mais rápido |
+| Three.js (PBR, sombras, PMREM) | `cpp/src/render/renderer.cpp` e `environment.cpp`, com as mesmas fórmulas do `MeshPhysicalMaterial` |
+| EffectComposer, N8AO, bloom, Bokeh | `cpp/src/render/postfx.cpp` |
+| GLTFLoader | `cpp/src/core/gltf_loader.cpp` (cgltf, texturas decodificadas em paralelo) |
+| HTML/CSS (garagem, HUD, cinemática) | `cpp/src/ui/ui.cpp`, `cpp/src/main.cpp`, `cpp/src/game/hud.cpp` |
+| Web Audio | `cpp/src/game/audio.cpp` (mesmo grafo, sintetizado no callback do SDL) |
+
+### Pistas (versão C++)
+
+Na garagem, **PILOTAR** abre a escolha da pista. As opções são a **Pista de teste** (asfalto infinito) e o **Spa-Francorchamps** (`mapas/circuit-de-spa-francorchamps-2022-layout`). **CORRER** (ou Enter) carrega e entra; **VOLTAR** (ou Esc) volta. O jogo lembra a última pista escolhida.
+
+Em Spa, cada superfície tem sua aderência: asfalto 100%, zebra 92%, grama 55%, brita 42% com resistência extra. Muros, barreiras, guard-rails e prédios têm colisão. O carro larga no grid, embaixo do pórtico de semáforos, virado para a La Source. As texturas em alta resolução da pasta `textures/` substituem as reduzidas do GLB, e as que vieram de cabeça para baixo são corrigidas sozinhas.
+
+Para adicionar outra pista: coloque o GLB em `mapas/<nome>/` e crie uma entrada em `cpp/src/game/maps.cpp`. A entrada diz quais materiais são asfalto, zebra, grama, brita e muro, quais têm transparência (árvores, cercas) ou são decalques (faixas, marcas de pneu), e qual objeto marca a largada. A miniatura fica em `assets/maps/`.
+
+Fontes em `assets/fonts`: Barlow e Barlow Condensed (OFL), Noto Sans (OFL) e DejaVu Sans Mono (licença livre do Bitstream Vera).
+
+Para testes automatizados, `SR_SCRIPT="sel 0;ready;play;ready;down W;wait 3;shot foto.png;quit" ./space_racer` executa comandos e tira screenshots.
+
 ## Créditos
 
 - Modelo: "Ferrari 296 GT3" por vecarz (Sketchfab), licença CC BY-NC 4.0. O crédito é obrigatório e o uso comercial não é permitido.

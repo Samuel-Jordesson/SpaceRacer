@@ -2,3 +2,10 @@
 Thumbs.db
 node_modules/
 *.log
+# versão nativa (C++)
+cpp/build/
+cpp/.tools/
+/space_racer
+/sr_physics_test
+/space_racer.exe
+/sr_physics_test.exe

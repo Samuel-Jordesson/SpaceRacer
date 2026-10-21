@@ -1,0 +1,4 @@
+Brasões das marcas (marcas registradas dos fabricantes; uso só ilustrativo neste projeto pessoal):
+- ferrari.png      escudo montado com o cavalinho de https://en.wikipedia.org/wiki/File:Prancing_horse.svg
+- porsche.png      https://en.wikipedia.org/wiki/File:Porsche_Logo_2024.png
+- lamborghini.png  https://en.wikipedia.org/wiki/File:Lamborghini_Logo.svg
