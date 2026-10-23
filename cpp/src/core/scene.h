@@ -18,7 +18,7 @@ struct Texture {
   std::vector<uint16_t> halfPixels;  // RGBA16F
   std::vector<float> floatPixels;  // RGBA32F
   bool srgb = false, mipmaps = true, repeat = true, linear = true;
-  float anisotropy = 1;
+  float anisotropy = 8;  // filtragem anisotrópica: chão e faixas nítidos em ângulo rasante
   void upload();
   void release();
   ~Texture();

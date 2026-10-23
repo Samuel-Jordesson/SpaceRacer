@@ -30,6 +30,10 @@ struct MapCfg {
   std::vector<std::string> spawnMarker, spawnRoad;  // pórtico da largada e o asfalto em volta
   bool clockwise = true;                         // sentido da corrida (visto de cima)
   float gridOffset = 18;                         // metros antes do pórtico
+  // árvores perto da pista: os "cartazes" destes materiais viram o modelo 3D treeModel
+  std::vector<std::string> treeReplace;
+  std::string treeModel;
+  float treeReplaceDist = 15;                    // até quantos metros do asfalto
 };
 
 struct MapEntry {
@@ -78,4 +82,14 @@ class TrackMap {
   TrackGround ground;
   vec3 spawnPos;
   float spawnHeading = 0;
+  // árvores 3D perto da câmera, cartaz original longe dela (chame a cada quadro)
+  void updateLod(const vec3& cam);
+
+ private:
+  void replaceTrees(const MapCfg& cfg, const std::vector<NodePtr>& meshes);
+  struct TreeCell {
+    float x, z;
+    NodePtr near, far;
+  };
+  std::vector<TreeCell> treeCells;
 };

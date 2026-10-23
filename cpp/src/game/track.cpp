@@ -275,6 +275,17 @@ void TrackMap::loadCPU(const MapEntry& entry, const std::function<void(float)>& 
   t0 = nowS();
   onProgress(0.85f);
 
+  // --- árvores perto da pista viram o modelo 3D
+  if (!cfg.treeModel.empty() && !cfg.treeReplace.empty()) {
+    try {
+      replaceTrees(cfg, meshes);
+    } catch (std::exception& e) {
+      std::printf("[pista] árvores 3D desligadas: %s\n", e.what());
+    }
+    std::printf("[pista] árvores: %.1f s\n", nowS() - t0);
+    t0 = nowS();
+  }
+
   // --- divide malhas enormes em blocos de 250 m (o recorte por visibilidade passa a funcionar)
   const float CELL = 400;
   for (auto& m : meshes) {
@@ -360,6 +371,240 @@ void TrackMap::loadCPU(const MapEntry& entry, const std::function<void(float)>& 
   spawnHeading = std::atan2(-dir.x, -dir.z);
   std::printf("[pista] largada em (%.1f %.1f %.1f), direção (%.2f %.2f)\n", spawnPos.x, spawnPos.y, spawnPos.z, dir.x, dir.z);
   onProgress(1);
+}
+
+// Os "cartazes" de árvore do Spa são quads soltos (2 a 3 cruzados por árvore) fundidos em
+// malhas de centenas de milhares de vértices. Aqui eles são agrupados em árvores; as que ficam
+// a até treeReplaceDist do asfalto saem da malha e ganham o modelo 3D. Cada uma fica numa célula
+// de 160 m com duas versões: o modelo (perto da câmera) e o cartaz original (longe), ver updateLod.
+void TrackMap::replaceTrees(const MapCfg& cfg, const std::vector<NodePtr>& meshes) {
+  // --- modelo: geometria assada com a base no chão (0) e altura 1
+  GltfAsset tg = loadGltf(assetPath(cfg.treeModel), [](float) {});
+  tg.scene->updateMatrixWorld();
+  struct Part { GeometryPtr geo; MaterialPtr mat; };
+  std::vector<Part> parts;
+  Box3 mb;
+  tg.scene->traverse([&](Node& n) {
+    if (!n.isMesh()) return;
+    auto g = std::make_shared<Geometry>();
+    const Geometry& s = *n.geometry;
+    for (size_t i = 0; i < s.pos.size(); i++) {
+      vec3 p = n.matrixWorld.point(s.pos[i]);
+      g->pos.push_back(p);
+      mb.expand(p);
+      if (!s.nrm.empty()) g->nrm.push_back(normalize(n.matrixWorld.point(s.pos[i] + s.nrm[i]) - p));
+      if (!s.uv0.empty()) g->uv0.push_back(s.uv0[i]);
+    }
+    g->idx = s.idx;
+    n.material->doubleSided = true;
+    // partes transparentes da textura da folha são brancas: nos mipmaps (árvore ao longe) elas se
+    // misturam às folhas e a copa fica esbranquiçada. Pinta-as com a cor média das folhas.
+    if (n.material->alphaTest > 0 && n.material->map && !n.material->map.tex->pixels.empty()) {
+      auto& px = n.material->map.tex->pixels;
+      double sum[3] = {0, 0, 0}, cnt = 0;
+      for (size_t i = 0; i + 3 < px.size(); i += 4)
+        if (px[i + 3] > 128) { sum[0] += px[i]; sum[1] += px[i + 1]; sum[2] += px[i + 2]; cnt++; }
+      if (cnt > 0)
+        for (size_t i = 0; i + 3 < px.size(); i += 4)
+          if (px[i + 3] <= 128)
+            for (int k = 0; k < 3; k++) px[i + k] = (uint8_t)(sum[k] / cnt);
+    }
+    // folha e casca foscas: o GLB pede especular 0 (KHR_materials_specular), senão as folhas
+    // viradas para o sol estouram em branco
+    n.material->physical = true;
+    n.material->specularIntensity = 0.05f;
+    n.material->roughness = 1;
+    n.material->metalness = 0;
+    for (TexRef* t : {&n.material->map, &n.material->normalMap})
+      if (*t) t->tex->anisotropy = 8;
+    parts.push_back({g, n.material});
+  });
+  if (parts.empty() || mb.empty()) throw std::runtime_error("modelo de árvore vazio");
+  float H0 = mb.max.y - mb.min.y;
+  vec3 base((mb.min.x + mb.max.x) / 2, mb.min.y, (mb.min.z + mb.max.z) / 2);
+  for (auto& p : parts) {
+    for (auto& v : p.geo->pos) v = (v - base) / H0;
+    p.geo->computeBounds();
+  }
+
+  // --- pontos do asfalto numa grade de 20 m (vértices e centros dos triângulos)
+  const float RG = 20, R = cfg.treeReplaceDist;
+  auto key = [](int x, int z) { return ((int64_t)x << 32) ^ (int64_t)(uint32_t)z; };
+  std::unordered_map<int64_t, std::vector<vec2>> rgrid;
+  for (auto& m : meshes) {
+    if (!matches(m->material->name, cfg.spawnRoad)) continue;
+    const Geometry& g = *m->geometry;
+    const mat4& w = m->matrixWorld;
+    for (size_t i = 0; i + 2 < g.idx.size(); i += 3) {
+      vec3 a = w.point(g.pos[g.idx[i]]), b = w.point(g.pos[g.idx[i + 1]]), c = w.point(g.pos[g.idx[i + 2]]);
+      for (vec3 p : {a, b, c, (a + b + c) / 3.0f, (a + b) / 2.0f, (b + c) / 2.0f, (a + c) / 2.0f})
+        rgrid[key((int)std::floor(p.x / RG), (int)std::floor(p.z / RG))].push_back({p.x, p.z});
+    }
+  }
+  auto nearRoad = [&](float x, float z) {
+    int cx = (int)std::floor(x / RG), cz = (int)std::floor(z / RG), r = (int)std::ceil(R / RG);
+    for (int i = cx - r; i <= cx + r; i++)
+      for (int k = cz - r; k <= cz + r; k++) {
+        auto it = rgrid.find(key(i, k));
+        if (it == rgrid.end()) continue;
+        for (auto& p : it->second)
+          if ((p.x - x) * (p.x - x) + (p.y - z) * (p.y - z) < R * R) return true;
+      }
+    return false;
+  };
+
+  // --- células de 160 m (modelo perto / cartaz longe)
+  const float CELL = 160;
+  std::map<std::pair<int, int>, int> cellOf;
+  auto cellFor = [&](float x, float z) {
+    std::pair<int, int> k{(int)std::floor(x / CELL), (int)std::floor(z / CELL)};
+    auto it = cellOf.find(k);
+    if (it != cellOf.end()) return it->second;
+    TreeCell c{(k.first + 0.5f) * CELL, (k.second + 0.5f) * CELL, makeNode("trees-near"), makeNode("trees-far")};
+    c.near->visible = false;
+    root->add(c.near);
+    root->add(c.far);
+    treeCells.push_back(c);
+    return cellOf[k] = (int)treeCells.size() - 1;
+  };
+
+  size_t replaced = 0, total = 0;
+  for (auto& m : meshes) {
+    if (!matches(m->material->name, cfg.treeReplace)) continue;
+    Geometry& g = *m->geometry;
+    const mat4& w = m->matrixWorld;
+    size_t nv = g.pos.size();
+    // quads = componentes ligados por vértices
+    std::vector<uint32_t> par(nv);
+    for (size_t i = 0; i < nv; i++) par[i] = (uint32_t)i;
+    auto find = [&](uint32_t a) {
+      while (par[a] != a) a = par[a] = par[par[a]];
+      return a;
+    };
+    for (size_t i = 0; i + 2 < g.idx.size(); i += 3) {
+      uint32_t a = find(g.idx[i]);
+      par[find(g.idx[i + 1])] = a;
+      par[find(g.idx[i + 2])] = a;
+    }
+    std::unordered_map<uint32_t, int> compOf;
+    std::vector<Box3> comps;
+    for (size_t v = 0; v < nv; v++) {
+      uint32_t r = find((uint32_t)v);
+      auto it = compOf.find(r);
+      if (it == compOf.end()) {
+        it = compOf.emplace(r, (int)comps.size()).first;
+        comps.emplace_back();
+      }
+      comps[it->second].expand(w.point(g.pos[v]));
+    }
+    // quads cruzados com o mesmo centro (até 1 m) = uma árvore
+    struct Tree { Box3 b; bool replace = false; };
+    std::vector<Tree> trees;
+    std::unordered_map<int64_t, std::vector<int>> tgrid;
+    std::vector<int> treeOf(comps.size());
+    for (size_t c = 0; c < comps.size(); c++) {
+      vec3 ctr = comps[c].center();
+      int kx = (int)std::floor(ctr.x), kz = (int)std::floor(ctr.z), found = -1;
+      for (int i = kx - 1; i <= kx + 1 && found < 0; i++)
+        for (int k = kz - 1; k <= kz + 1 && found < 0; k++) {
+          auto it = tgrid.find(key(i, k));
+          if (it == tgrid.end()) continue;
+          for (int t : it->second) {
+            vec3 tc = trees[t].b.center();
+            if (std::hypot(tc.x - ctr.x, tc.z - ctr.z) < 1.0f) { found = t; break; }
+          }
+        }
+      if (found < 0) {
+        found = (int)trees.size();
+        trees.emplace_back();
+        tgrid[key(kx, kz)].push_back(found);
+      }
+      trees[found].b.expand(comps[c].min);
+      trees[found].b.expand(comps[c].max);
+      treeOf[c] = found;
+    }
+    for (auto& t : trees) {
+      vec3 c = t.b.center();
+      t.replace = t.b.max.y - t.b.min.y > 3 && nearRoad(c.x, c.z);
+    }
+    total += trees.size();
+    // tira os triângulos das árvores trocadas (eles vão para o cartaz "longe" da célula)
+    std::vector<uint32_t> keep;
+    std::map<int, std::vector<uint32_t>> far;
+    for (size_t i = 0; i + 2 < g.idx.size(); i += 3) {
+      int t = treeOf[compOf[find(g.idx[i])]];
+      if (!trees[t].replace) {
+        keep.insert(keep.end(), {g.idx[i], g.idx[i + 1], g.idx[i + 2]});
+        continue;
+      }
+      vec3 c = trees[t].b.center();
+      auto& v = far[cellFor(c.x, c.z)];
+      v.insert(v.end(), {g.idx[i], g.idx[i + 1], g.idx[i + 2]});
+    }
+    g.idx = std::move(keep);
+    g.computeBounds();
+    vec3 mp, ms;
+    quat mq;
+    w.decompose(mp, mq, ms);
+    for (auto& [cell, tri] : far) {
+      auto ng = std::make_shared<Geometry>();
+      std::unordered_map<uint32_t, uint32_t> remap;
+      for (uint32_t o : tri) {
+        auto it = remap.find(o);
+        if (it == remap.end()) {
+          it = remap.emplace(o, (uint32_t)ng->pos.size()).first;
+          ng->pos.push_back(g.pos[o]);
+          if (!g.nrm.empty()) ng->nrm.push_back(g.nrm[o]);
+          if (!g.uv0.empty()) ng->uv0.push_back(g.uv0[o]);
+          if (!g.uv1.empty()) ng->uv1.push_back(g.uv1[o]);
+        }
+        ng->idx.push_back(it->second);
+      }
+      ng->computeBounds();
+      auto n = makeNode(m->name + "-far");
+      n->geometry = ng;
+      n->material = m->material;
+      n->position = mp;
+      n->quaternion = mq;
+      n->scale = ms;
+      n->castShadow = m->castShadow;
+      n->receiveShadow = m->receiveShadow;
+      treeCells[cell].far->add(n);
+    }
+    // o modelo 3D no lugar de cada árvore trocada (altura parecida, giro e tamanho variados)
+    for (auto& t : trees) {
+      if (!t.replace) continue;
+      replaced++;
+      vec3 c = t.b.center();
+      uint32_t h = (uint32_t)(int)(c.x * 73.13f) * 2654435761u ^ (uint32_t)(int)(c.z * 91.7f) * 40503u;
+      float r0 = (h & 0xffff) / 65535.f, r1 = ((h >> 16) & 0xffff) / 65535.f;
+      float height = std::clamp(t.b.max.y - t.b.min.y, 5.f, 22.f) * (0.9f + 0.2f * r1);
+      quat q = quat::fromAxisAngle({0, 1, 0}, r0 * 6.2831853f);
+      NodePtr& grp = treeCells[cellFor(c.x, c.z)].near;
+      for (auto& p : parts) {
+        auto n = makeNode("tree3d");
+        n->geometry = p.geo;
+        n->material = p.mat;
+        n->position = vec3(c.x, t.b.min.y - 0.15f, c.z);
+        n->quaternion = q;
+        n->scale = vec3(height);
+        n->castShadow = true;
+        n->receiveShadow = true;
+        grp->add(n);
+      }
+    }
+  }
+  std::printf("[pista] árvores: %zu de %zu trocadas pelo modelo 3D (até %.0f m da pista), %zu células\n", replaced, total, R,
+              treeCells.size());
+}
+
+void TrackMap::updateLod(const vec3& cam) {
+  for (auto& c : treeCells) {
+    // o centro da célula está a até ~113 m das bordas; 270 m deixa o modelo a uns 150+ m à frente
+    bool near = std::hypot(c.x - cam.x, c.z - cam.z) < 270;
+    c.near->visible = near;
+    c.far->visible = !near;
+  }
 }
 
 void TrackMap::upload() {

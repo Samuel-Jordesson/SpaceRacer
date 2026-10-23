@@ -7,13 +7,15 @@
 #include "../../third_party/stb_image.h"
 #include "../core/assets.h"
 
-static const char* HDRI_URL = "assets/hdri/sky_4k.hdr";
+static const char* HDRI_DAY = "assets/hdri/dayskyhdri012b_2k.hdr";
+static const char* HDRI_SUNSET = "assets/hdri/eveningskyhdri046b_2k.hdr";
 static const float ASPHALT_TILE = 3.2f;  // metros cobertos por uma repetição da textura
 
 void World::loadCPU(const std::function<void(float)>& onProgress) {
   onProgress(0.02f);
   // --- céu HDRI (linhas de cima para baixo, como o RGBELoader antes do flipY)
   int W, H, comp;
+  const char* HDRI_URL = timeOfDay == 1 ? HDRI_SUNSET : HDRI_DAY;
   float* rgb = stbi_loadf(assetPath(HDRI_URL).c_str(), &W, &H, &comp, 3);
   if (!rgb) throw std::runtime_error("não foi possível ler " + std::string(HDRI_URL));
   onProgress(0.55f);
@@ -29,7 +31,9 @@ void World::loadCPU(const std::function<void(float)>& onProgress) {
   float u = (px + 0.5f) / W, v = 1 - (py + 0.5f) / H;
   float lat = (v - 0.5f) * (float)M_PI, phi = (u - 0.5f) * 2 * (float)M_PI;
   sunDir = normalize(vec3(std::cos(phi) * std::cos(lat), std::sin(lat), std::sin(phi) * std::cos(lat)));
-  if (sunDir.y < 0.15f) { sunDir.y = 0.15f; sunDir = normalize(sunDir); }
+  // de dia o sol não desce demais (sombras curtas); no pôr do sol fica rasante, com sombras longas
+  float minSunY = timeOfDay == 1 ? 0.06f : 0.15f;
+  if (sunDir.y < minSunY) { sunDir.y = minSunY; sunDir = normalize(sunDir); }
 
   // cor média logo acima do horizonte (para a neblina)
   int row = (int)std::floor(H * 0.47);
@@ -79,7 +83,7 @@ void World::loadCPU(const std::function<void(float)>& onProgress) {
   background = std::make_shared<Texture>();
   background->width = W;
   background->height = H;
-  background->mipmaps = false;
+  background->mipmaps = true;  // o shader do céu escolhe o mip pelo tamanho do pixel
   background->halfPixels.resize((size_t)W * H * 4);
   {
     unsigned nT = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
@@ -90,7 +94,7 @@ void World::loadCPU(const std::function<void(float)>& onProgress) {
           const float* src = rgb + (size_t)(H - 1 - y) * W * 3;
           uint16_t* dst = background->halfPixels.data() + (size_t)y * W * 4;
           for (int x = 0; x < W; x++) {
-            for (int k = 0; k < 3; k++) dst[x * 4 + k] = floatToHalf(std::min(src[x * 3 + k], 65000.f));
+            for (int k = 0; k < 3; k++) dst[x * 4 + k] = floatToHalf(std::min(src[x * 3 + k], 400.f));
             dst[x * 4 + 3] = 0x3c00;
           }
         }
@@ -121,13 +125,23 @@ void World::finishGPU() {
   scene.env = env.get();
   scene.envIntensity = 1;
 
-  scene.fog.type = Fog::Exp2;
+  // neblina atmosférica: ~30% de véu a 1,5 km e horizonte quase todo na cor do céu; a densidade
+  // cai pela metade a cada ~170 m de altura (morros e céu mais limpos que os vales)
+  scene.fog.type = Fog::Atmosphere;
   scene.fog.color = horizon;
-  scene.fog.density = 0.00028f;
+  scene.fog.sunColor = horizon * 0.4f + vec3(1.0f, 0.86f, 0.66f) * 1.1f;
+  scene.fog.density = 0.00040f;
+  if (timeOfDay == 1) {
+    // fim de tarde: ar mais carregado e véu alaranjado contra o sol
+    scene.fog.sunColor = horizon * 0.3f + vec3(1.0f, 0.58f, 0.28f) * 1.2f;
+    scene.fog.density = 0.00055f;
+  }
+  scene.fog.falloff = 0.005f;
+  scene.fog.base = 0;
 
   // --- sol
-  sun.color = hexColor(0xfff1dc);
-  sun.intensity = 6.0f;
+  sun.color = hexColor(timeOfDay == 1 ? 0xffb066 : 0xfff1dc);
+  sun.intensity = timeOfDay == 1 ? 4.8f : 6.0f;
   sun.castShadow = true;
   sun.mapSize = 4096;
   sun.left = -12; sun.right = 12; sun.top = 12; sun.bottom = -12; sun.near = 1; sun.far = 200;
@@ -170,10 +184,22 @@ void World::setTrack(TrackMap* t) {
   if (track) scene.root->remove(track->root.get());
   track = t;
   flatGround->visible = t == nullptr;
+  scene.fog.base = t ? t->spawnPos.y : 0.f;  // a névoa assenta no nível da pista
   if (t) scene.root->add(t->root);
+}
+
+void World::setShadowDistance(float meters) {
+  float h = meters / 2;
+  sun.left = -h; sun.right = h; sun.top = h; sun.bottom = -h;
+  // a "câmera" do sol fica longe o bastante para pegar morros e prédios fora do quadrado
+  shadowReach = h + 120;
+  sun.near = 1;
+  sun.far = shadowReach * 2;
+  // texel maior com alcance maior: o desvio pela normal cresce junto (sem "acne" na pista)
+  sun.normalBias = 0.025f * std::max(1.f, meters / 24);
 }
 
 void World::follow(const vec3& p) {
   sun.target = p;
-  sun.position = p + sunDir * 80.0f;
+  sun.position = p + sunDir * shadowReach;
 }

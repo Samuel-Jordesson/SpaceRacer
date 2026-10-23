@@ -15,6 +15,8 @@ struct Settings {
   int ao = 1;                // 0 = desligada, 1 = normal (meia resolução), 2 = alta
   bool bloom = true;
   int shadow = 4096;         // 1024, 2048 ou 4096
+  int shadowDist = 60;       // alcance das sombras em metros (20, 40, 60, 100 ou 150)
+  float shadowSoft = 1;      // suavidade da borda das sombras (0,5 = nítida … 3 = bem suave)
   bool lensFx = true;        // vinheta, grão e aberração cromática
   bool speedBlur = true;     // desfoque radial em alta velocidade
   bool autoQuality = true;   // baixa a qualidade sozinho se o fps cair
@@ -30,6 +32,7 @@ struct Settings {
   // garagem
   std::string lastCar;  // id do último carro escolhido (abre com ele)
   std::string lastMap;  // id da última pista escolhida
+  int timeOfDay = 0;    // 0 = dia, 1 = pôr do sol
 
   void applyPreset(int p);
   // depois de mudar um item: vira "personalizado" se não bater com nenhum nível

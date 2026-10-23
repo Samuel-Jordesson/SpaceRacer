@@ -61,6 +61,8 @@ void Settings::load() {
     else if (k == "ao") v >> ao;
     else if (k == "bloom") v >> bloom;
     else if (k == "shadow") v >> shadow;
+    else if (k == "shadowDist") v >> shadowDist;
+    else if (k == "shadowSoft") v >> shadowSoft;
     else if (k == "lensFx") v >> lensFx;
     else if (k == "speedBlur") v >> speedBlur;
     else if (k == "autoQuality") v >> autoQuality;
@@ -74,13 +76,17 @@ void Settings::load() {
     else if (k == "volume") v >> volume;
     else if (k == "lastCar") v >> lastCar;
     else if (k == "lastMap") v >> lastMap;
+    else if (k == "timeOfDay") v >> timeOfDay;
   }
   // valores fora do esperado (arquivo editado à mão)
   pixelRatio = std::fmax(0.5f, std::fmin(2.0f, pixelRatio));
   if (msaa != 0 && msaa != 2 && msaa != 4) msaa = 4;
   ao = std::max(0, std::min(2, ao));
   if (shadow != 1024 && shadow != 2048 && shadow != 4096) shadow = 4096;
+  if (shadowDist != 20 && shadowDist != 40 && shadowDist != 60 && shadowDist != 100 && shadowDist != 150) shadowDist = 60;
+  shadowSoft = std::fmax(0.5f, std::fmin(3.f, shadowSoft));
   volume = std::fmax(0.f, std::fmin(1.f, volume));
+  timeOfDay = std::max(0, std::min(1, timeOfDay));
   windowW = std::max(MIN_WINDOW_W, std::min(7680, windowW));
   windowH = std::max(MIN_WINDOW_H, std::min(4320, windowH));
   matchPreset();
@@ -89,7 +95,7 @@ void Settings::load() {
 void Settings::save() const {
   std::ofstream out(path());
   out << "preset=" << preset << "\npixelRatio=" << pixelRatio << "\nmsaa=" << msaa << "\nao=" << ao << "\nbloom=" << bloom
-      << "\nshadow=" << shadow << "\nlensFx=" << lensFx << "\nspeedBlur=" << speedBlur << "\nautoQuality=" << autoQuality
+      << "\nshadow=" << shadow << "\nshadowDist=" << shadowDist << "\nshadowSoft=" << shadowSoft << "\nlensFx=" << lensFx << "\nspeedBlur=" << speedBlur << "\nautoQuality=" << autoQuality
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nwindowW=" << windowW << "\nwindowH=" << windowH
-      << "\nwindowX=" << windowX << "\nwindowY=" << windowY << "\nwindowMax=" << windowMax << "\nvolume=" << volume << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\n";
+      << "\nwindowX=" << windowX << "\nwindowY=" << windowY << "\nwindowMax=" << windowMax << "\nvolume=" << volume << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\ntimeOfDay=" << timeOfDay << "\n";
 }

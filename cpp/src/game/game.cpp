@@ -16,9 +16,15 @@ Game::~Game() {
   if (prepThread.joinable()) prepThread.join();
 }
 
-void Game::beginPrepare(const MapEntry& m) {
+void Game::beginPrepare(const MapEntry& m, int timeOfDay) {
   if (prepThread.joinable()) return;
   map = &m;
+  // outro horário: o céu, a luz e a neblina mudam, então o mundo é recarregado (as pistas ficam)
+  if (world && worldReady && world->timeOfDay != timeOfDay) {
+    world->setTrack(nullptr);  // solta a pista da cena antiga (senão o nó fica com pai inválido)
+    world.reset();
+    worldReady = false;
+  }
   bool needTrack = !m.flat && !tracks.count(m.id);
   ready = worldReady && !needTrack;
   if (ready) {
@@ -26,6 +32,7 @@ void Game::beginPrepare(const MapEntry& m) {
     return;
   }
   if (!world) world = std::make_unique<World>();
+  world->timeOfDay = timeOfDay;
   if (needTrack) loadingTrack = std::make_unique<TrackMap>();
   prepDone = false;
   prepProgress = 0;
@@ -61,6 +68,10 @@ bool Game::pollPrepare(std::string& error) {
     world->scene.transparentFirst.push_back(skids.get());
     world->scene.transparentLast.push_back(smoke.get());
     world->setShadowQuality(fx.quality().shadow);
+    if (settings) {
+      world->setShadowDistance((float)settings->shadowDist);
+      world->setShadowSoftness(settings->shadowSoft);
+    }
     carObj = makeNode("car");
     visual = makeNode("visual");
     carObj->add(visual);
@@ -86,6 +97,7 @@ void Game::start(const CarEntry& e, const std::shared_ptr<LoadedCar>& l) {
   hud = std::make_unique<Hud>(spec);
   ground = world->physicsGround();
   car = std::make_unique<phys::Vehicle>(spec, ground, &loaded->geometry);
+  rig.ground = ground;
   {
     // largada da pista (na pista de teste: origem)
     vec3 sp = world->spawnPos();
@@ -106,7 +118,10 @@ void Game::start(const CarEntry& e, const std::shared_ptr<LoadedCar>& l) {
   rig.pos = vec3(0, 1.65f, 5.6f);
   rig.yaw = 0;
   fx.toneMapping = PostFX::ToneMapping::ACES;
-  fx.exposure = 0.95f;
+  // pôr do sol: um pouco mais de exposição e gradação mais quente
+  bool sunset = world->timeOfDay == 1;
+  fx.exposure = sunset ? 1.2f : 0.95f;
+  fx.saturation = sunset ? 1.14f : 1.08f;
   audio.start();
   audio.setPaused(false);
   if (settings) {
@@ -184,7 +199,11 @@ void Game::applySettings() {
   fx.lensFx = settings->lensFx;
   fx.speedBlur = settings->speedBlur;
   fx.resize(winW, winH, dpr);
-  if (world) world->setShadowQuality(fx.quality().shadow);
+  if (world) {
+    world->setShadowQuality(fx.quality().shadow);
+    world->setShadowDistance((float)settings->shadowDist);
+    world->setShadowSoftness(settings->shadowSoft);
+  }
   audio.setVolume(settings->volume);
 }
 
@@ -256,8 +275,18 @@ void Game::autoQuality(float dt) {
 }
 
 void Game::syncVisuals(float dt) {
-  carObj->position = vec3((float)car->pos.x, (float)car->pos.y, (float)car->pos.z);
+  // a física anda em passos de 1 ms e sobra um pedaço (acc) até o próximo passo: o carro é
+  // desenhado adiantado por essa sobra. Sem isso a rotação pula de quadro em quadro e a câmera
+  // presa ao carro sacode o céu e o chão nas curvas
+  float ahead = paused ? 0.f : (float)acc;
+  carObj->position = vec3((float)(car->pos.x + car->vel.x * ahead), (float)(car->pos.y + car->vel.y * ahead),
+                          (float)(car->pos.z + car->vel.z * ahead));
   carObj->quaternion = quat((float)car->quat.x, (float)car->quat.y, (float)car->quat.z, (float)car->quat.w);
+  {
+    vec3 w((float)car->angVel.x, (float)car->angVel.y, (float)car->angVel.z);
+    float wl = length(w);
+    if (wl > 1e-5f && ahead > 0) carObj->quaternion = (quat::fromAxisAngle(w * (1 / wl), wl * ahead) * carObj->quaternion).normalized();
+  }
   for (const auto& w : car->wheels) {
     auto it = loaded->pivots.find(w.id);
     if (it == loaded->pivots.end()) continue;
@@ -315,7 +344,15 @@ void Game::frame(float dt) {
   rig.update(dt, *carObj, *visual, *car);
   camera.aspect = (float)winW / std::max(1, winH);
   camera.update();
-  world->follow(carObj->position);
+  {
+    // o quadrado da sombra fica um pouco à frente do carro (é para lá que a câmera olha)
+    vec3 f = carObj->quaternion.rotate({0, 0, -1});
+    f.y = 0;
+    float fl = length(f);
+    vec3 center = carObj->position;
+    if (fl > 0.01f && settings) center += f * (1 / fl) * (settings->shadowDist * 0.25f);
+    world->follow(center);
+  }
   smoke->update(paused ? 0 : dt, camera.fov, (float)fx.height);
   hud->update(*car, input, rig.name(), dt);
   audio.update(*car);
@@ -330,6 +367,7 @@ void Game::frame(float dt) {
   if (prof) glFinish();
   double t2 = T();
   fx.beginScene();
+  if (TrackMap* tm = world->currentTrack()) tm->updateLod(camera.position);
   renderer.render(world->scene, camera, fx.width, fx.height);
   double t3 = T();
   if (prof) glFinish();

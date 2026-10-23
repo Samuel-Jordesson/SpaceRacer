@@ -11,6 +11,7 @@ uniform float uFogNear, uFogFar, uFogDensity;
 vec3 applyFog(vec3 c, float depth) {
   if (uFogType == 1) return mix(c, uFogColor, smoothstep(uFogNear, uFogFar, depth));
   if (uFogType == 2) return mix(c, uFogColor, 1.0 - exp(-uFogDensity * uFogDensity * depth * depth));
+  if (uFogType == 3) return mix(c, uFogColor, 1.0 - exp(-uFogDensity * depth));
   return c;
 }
 )";

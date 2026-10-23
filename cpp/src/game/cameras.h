@@ -27,5 +27,6 @@ class CameraRig {
   vec3 hoodEye{0, 1.0f, -0.75f};
   float t = 0;
   vec3 lastCar;
+  const phys::Ground* ground = nullptr;  // chão da pista (a câmera não entra nele)
   std::vector<Node*> hideInCockpit;
 };

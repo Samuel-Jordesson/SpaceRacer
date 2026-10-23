@@ -26,7 +26,7 @@ class Game {
   ~Game();
 
   // carrega o mundo uma única vez (em segundo plano); chame pollPrepare() a cada quadro
-  void beginPrepare(const MapEntry& map);
+  void beginPrepare(const MapEntry& map, int timeOfDay = 0);
   bool preparing() const { return prepThread.joinable(); }
   bool prepared() const { return ready; }
   float prepareProgress() const { return prepProgress; }

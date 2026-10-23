@@ -15,6 +15,9 @@ class World {
   void finishGPU();
 
   void setShadowQuality(int size) { sun.mapSize = size; }
+  // alcance da sombra (lado do quadrado coberto pelo mapa, em metros) e suavidade da borda
+  void setShadowDistance(float meters);
+  void setShadowSoftness(float s) { sun.softness = s; }
   // a sombra acompanha o carro
   void follow(const vec3& p);
   // troca a pista: nullptr = pista de teste (asfalto infinito)
@@ -24,6 +27,7 @@ class World {
   vec3 spawnPos() const { return track ? track->spawnPos : vec3(); }
   float spawnHeading() const { return track ? track->spawnHeading : 0.f; }
 
+  int timeOfDay = 0;  // 0 = dia, 1 = pôr do sol (defina antes de loadCPU)
   Scene scene;
   DirectionalLight sun;
   vec3 sunDir;
@@ -35,4 +39,5 @@ class World {
   TrackMap* track = nullptr;
   TexturePtr background, envTex, asphaltMap, asphaltNormal, asphaltRough;
   vec3 horizon;
+  float shadowReach = 80;
 };

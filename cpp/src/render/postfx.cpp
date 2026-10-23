@@ -92,12 +92,19 @@ void main() {
 
 const char* AO_COMPOSITE_FS = R"(
 in vec2 vUv;
-uniform sampler2D tScene, tAo;
+uniform sampler2D tScene, tAo, tDepth;
+uniform mat4 uInvProj;
 uniform float uIntensity;
 out vec4 fragColor;
 void main() {
   vec4 c = texture(tScene, vUv);
   float ao = pow(clamp(texture(tAo, vUv).r, 0.0, 1.0), uIntensity);
+  // a AO é aplicada depois da neblina: ao longe ela apagaria a névoa (morros e árvores
+  // escuros); some entre 25 e 120 m, onde a oclusão de contato já não se vê
+  float d = textureLod(tDepth, vUv, 0.0).r;
+  vec4 vp = uInvProj * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  float dist = -vp.z / vp.w;
+  ao = mix(ao, 1.0, smoothstep(25.0, 120.0, dist));
   fragColor = vec4(c.rgb * ao, c.a);
 }
 )";
@@ -197,6 +204,27 @@ void main() {
 }
 )";
 
+// resolve do MSAA ponderado pelo tone mapping: cada amostra pesa 1/(1+brilho), assim bordas de
+// reflexos fortes (lataria, cromados) não ficam serrilhadas depois do ACES
+const char* RESOLVE_FS = R"(
+uniform sampler2DMS tMs;
+uniform int uSamples;
+uniform float uExposure;
+out vec4 fragColor;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec3 sum = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = 0; i < uSamples; i++) {
+    vec3 c = max(texelFetch(tMs, p, i).rgb, vec3(0.0));
+    float w = 1.0 / (1.0 + max(c.r, max(c.g, c.b)) * uExposure);
+    sum += c * w;
+    wsum += w;
+  }
+  fragColor = vec4(sum / max(wsum, 1e-6), 1.0);
+}
+)";
+
 // OutputPass: tone mapping + sRGB
 const char* OUTPUT_FS = R"(
 in vec2 vUv;
@@ -234,8 +262,18 @@ void main() {
   float r = length(c);
   vec2 ca = c * r * 0.0035 * (1.0 + uSpeed * 1.5) * uLens;
   vec3 col;
-  if (uFxaa > 0.5) col = fxaa(uv);
-  else col = vec3(texture(tDiffuse, uv - ca).r, texture(tDiffuse, uv).g, texture(tDiffuse, uv + ca).b);
+  if (uFxaa > 0.5) {
+    // FXAA suaviza o que o MSAA não pega (brilho de reflexo, detalhes finos ao longe);
+    // a aberração cromática entra como diferença sobre o resultado
+    col = fxaa(uv);
+    if (uLens > 0.0) {
+      vec3 m = texture(tDiffuse, uv).rgb;
+      col.r += texture(tDiffuse, uv - ca).r - m.r;
+      col.b += texture(tDiffuse, uv + ca).b - m.b;
+    }
+  } else {
+    col = vec3(texture(tDiffuse, uv - ca).r, texture(tDiffuse, uv).g, texture(tDiffuse, uv + ca).b);
+  }
   float sb = uSpeed * smoothstep(0.18, 0.7, r) * 0.03 * uSpeedBlur;
   if (sb > 0.0005) {
     vec3 acc = col;
@@ -247,8 +285,14 @@ void main() {
   col = mix(vec3(l), col, uSaturation);
   col *= mix(vec3(1.0), mix(vec3(0.97, 0.99, 1.04), vec3(1.03, 1.0, 0.96), smoothstep(0.2, 0.8, l)), uTint);
   col *= 1.0 - uVignette * uLens * smoothstep(0.35, 0.85, r);
-  float n = fract(sin(dot(uv * uResolution + uTime * 61.0, vec2(12.9898, 78.233))) * 43758.5453);
-  col += (n - 0.5) * 0.018 * uLens;
+  // grão com hash inteiro (o truque do sin() com argumentos enormes vira um padrão em blocos
+  // que "rasteja" sobre áreas lisas como o céu); mais fraco nas partes claras
+  uvec3 hv = uvec3(uvec2(gl_FragCoord.xy), uint(uTime * 60.0));
+  hv = hv * 1664525u + 1013904223u;
+  hv.x += hv.y * hv.z; hv.y += hv.z * hv.x; hv.z += hv.x * hv.y;
+  hv ^= hv >> 16u;
+  float n = float(hv.x + hv.y + hv.z & 0xffffu) / 65535.0;
+  col += (n - 0.5) * 0.010 * uLens * (1.0 - 0.6 * l);
   fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 )";
@@ -296,6 +340,7 @@ PostFX::PostFX() {
   bokehShader = std::make_unique<Shader>(GLSL_FULLSCREEN_VS, fs(BOKEH_FS));
   output = std::make_unique<Shader>(GLSL_FULLSCREEN_VS, fs(OUTPUT_FS));
   finalShader = std::make_unique<Shader>(GLSL_FULLSCREEN_VS, fs(FINAL_FS));
+  resolveShader = std::make_unique<Shader>(GLSL_FULLSCREEN_VS, fs(RESOLVE_FS));
 }
 
 PostFX::~PostFX() { destroy(); }
@@ -326,7 +371,7 @@ void PostFX::destroy() {
   auto delF = [](GLuint& f) { if (f) glDeleteFramebuffers(1, &f); f = 0; };
   auto delT = [](GLuint& t) { if (t) glDeleteTextures(1, &t); t = 0; };
   delF(msFbo);
-  if (msColor) glDeleteRenderbuffers(1, &msColor);
+  if (msColor) glDeleteTextures(1, &msColor);
   if (msDepth) glDeleteRenderbuffers(1, &msDepth);
   msColor = msDepth = 0;
   delF(sceneFbo); delT(sceneTex); delT(depthTex);
@@ -350,10 +395,12 @@ void PostFX::build() {
   if (q.msaa > 0) {
     glGenFramebuffers(1, &msFbo);
     glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
-    glGenRenderbuffers(1, &msColor);
-    glBindRenderbuffer(GL_RENDERBUFFER, msColor);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, q.msaa, GL_RGBA16F, width, height);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msColor);
+    // cor em textura multiamostra (lida pelo resolve ponderado)
+    glGenTextures(1, &msColor);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, msColor);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, q.msaa, GL_RGBA16F, width, height, GL_TRUE);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, msColor, 0);
     glGenRenderbuffers(1, &msDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, msDepth);
     glRenderbufferStorageMultisample(GL_RENDERBUFFER, q.msaa, GL_DEPTH_COMPONENT32F, width, height);
@@ -400,8 +447,16 @@ void PostFX::endScene(float dt, float speed01, const Camera& cam) {
   if (q.msaa > 0) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneFbo);
-    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    target(sceneFbo, width, height);
+    resolveShader->use();
+    resolveShader->set("tMs", 0);
+    resolveShader->set("uSamples", q.msaa);
+    resolveShader->set("uExposure", exposure);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, msColor);
+    drawFullscreen();
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
   }
   GLuint cur = sceneTex;  // textura com a imagem atual
   int ping = 0;
@@ -445,8 +500,11 @@ void PostFX::endScene(float dt, float speed01, const Camera& cam) {
     aoComposite->set("tScene", 0);
     aoComposite->set("tAo", 1);
     aoComposite->set("uIntensity", 2.2f);
+    aoComposite->set("tDepth", 2);
+    aoComposite->set("uInvProj", invProj);
     bindTex(0, cur);
     bindTex(1, aoTex[0]);
+    bindTex(2, depthTex);
     drawFullscreen();
     cur = out;
   }
@@ -547,7 +605,7 @@ void PostFX::endScene(float dt, float speed01, const Camera& cam) {
   f.set("uTint", tint);
   f.set("uLens", lensFx ? 1.0f : 0.0f);
   f.set("uSpeedBlur", speedBlur ? 1.0f : 0.0f);
-  f.set("uFxaa", q.msaa == 0 ? 1.0f : 0.0f);
+  f.set("uFxaa", 1.0f);
   bindTex(0, cur);
   drawFullscreen();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);

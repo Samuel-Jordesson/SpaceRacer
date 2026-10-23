@@ -169,6 +169,10 @@ class App {
       if (mc.thumb) mc.thumb->upload();
       mapCards.push_back(std::move(mc));
     }
+    for (int i = 0; i < 2; i++) {
+      skyThumb[i] = loadImage(i == 0 ? "assets/maps/sky-day.jpg" : "assets/maps/sky-sunset.jpg", false);
+      if (skyThumb[i]) skyThumb[i]->upload();
+    }
     play.opacity = Transition(0.18f, 0.3f);
     cineBtn.opacity = Transition(0.3f, 0.3f);
     game.onExit = [this] { backToGarage(); };
@@ -344,6 +348,10 @@ class App {
         if (mode == Mode::Garage && !e.key.repeat && mapPage) {
           if (sc == SDL_SCANCODE_ESCAPE) setMapPage(false);
           if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER) startPlay();
+          if (sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_DOWN) {
+            settings.timeOfDay = 1 - settings.timeOfDay;
+            settings.save();
+          }
           if (sc == SDL_SCANCODE_RIGHT || sc == SDL_SCANCODE_LEFT) {
             int n = (int)mapCards.size();
             selectedMap = ((selectedMap + (sc == SDL_SCANCODE_RIGHT ? 1 : -1)) % n + n) % n;
@@ -734,7 +742,7 @@ class App {
     fadeError = false;
     fadeBar.snap(0);
     after(0.45f, [this, &mp] {
-      game.beginPrepare(mp);
+      game.beginPrepare(mp, settings.timeOfDay);
       waitingPrepare = true;
     });
   }
@@ -1167,6 +1175,32 @@ class App {
         ui.text(upper(mp.figures[i].first), fx, fy, fk, klh);
         ui.text(mp.figures[i].second, fx, fy + klh + 3, fv, 17 * 1.1f);
       }
+      // horário da corrida: dia ou pôr do sol (céu, luz e neblina mudam)
+      y += ((mp.figures.size() + 2) / 3) * (klh + 3 + 17 * 1.1f + 14) + 8;
+      ui.text("HORÁRIO", x, y, fk, klh);
+      y += klh + 8;
+      const char* names[2] = {"DIA", "PÔR DO SOL"};
+      float tw = (L.infoW - 12) / 2, th = L.narrow ? 54.f : 70.f;
+      for (int i = 0; i < 2; i++) {
+        Rect r{x + i * (tw + 12), y, tw, th + 28};
+        bool sel = settings.timeOfDay == i;
+        bool hov = pageT.to > 0.5f && r.contains(mouseX, mouseY);
+        if (sel || hov) ui.shadow(r, Color(0, 0, 0, sel ? 0.25f : 0.15f), 0, 10, 24, -14);
+        ui.blurPanel(r, Color(1, 1, 1, sel ? 1.f : hov ? 0.9f : 0.72f));
+        ui.pushClip(r);
+        if (skyThumb[i]) ui.imageCover(skyThumb[i]->id, skyThumb[i]->width, skyThumb[i]->height, {r.x, r.y, r.w, th}, 0.5f, 0.6f);
+        ui.popClip();
+        TextStyle ts{Font::BC600, 12, 12 * 0.2f, sel ? INK : INK2};
+        ui.text(names[i], r.x + 10, r.y + th + 8, ts, 12);
+        if (sel) ui.border(r, INK, 1.5f);
+        if (pageT.to > 0.5f && !sel) addHit(r, [this, i] { settings.timeOfDay = i; settings.save(); });
+      }
+      if (promptStyle() != PadStyle::Keyboard) {
+        TextStyle hs{Font::Barlow400, 11, 0, INK3};
+        float hx = x, hy = y + th + 28 + 16;
+        hx += drawPrompt(ui, promptStyle(), PadButton::DPadV, hx, hy, 14, "") + 6;
+        ui.text("Trocar horário", hx, hy - 7, hs, 14);
+      }
     }
     // faixa de pistas
     {
@@ -1285,6 +1319,10 @@ class App {
       int n = (int)mapCards.size();
       if (b == SDL_GAMEPAD_BUTTON_DPAD_LEFT) selectedMap = (selectedMap + n - 1) % n;
       if (b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT) selectedMap = (selectedMap + 1) % n;
+      if (b == SDL_GAMEPAD_BUTTON_DPAD_UP || b == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+        settings.timeOfDay = 1 - settings.timeOfDay;
+        settings.save();
+      }
       if (b == SDL_GAMEPAD_BUTTON_SOUTH || b == SDL_GAMEPAD_BUTTON_START) startPlay();
       if (b == SDL_GAMEPAD_BUTTON_EAST) setMapPage(false);
       return;
@@ -1520,11 +1558,36 @@ class App {
       {
         const char* shNames[3] = {"Baixa", "Média", "Alta"};
         int sel = settings.shadow == 1024 ? 0 : settings.shadow == 2048 ? 1 : 2;
-        settingRow(x, right, y, "Sombras", shNames[sel], "Resolução do mapa de sombra projetada pelo sol.", [this, sel](int d) {
+        settingRow(x, right, y, "Qualidade das sombras", shNames[sel], "Resolução do mapa de sombra. Mais alta = sombras mais definidas, principalmente com alcance grande.", [this, sel](int d) {
           int sel2 = cycleIndex(sel, d, 3);
           settings.shadow = sel2 == 0 ? 1024 : sel2 == 1 ? 2048 : 4096;
           changed();
         });
+      }
+      {
+        static const int dists[5] = {20, 40, 60, 100, 150};
+        int sel = 2;
+        for (int i = 0; i < 5; i++)
+          if (settings.shadowDist == dists[i]) sel = i;
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%d m", settings.shadowDist);
+        settingRow(x, right, y, "Distância das sombras", buf,
+                   "Até onde as sombras aparecem em volta do carro. Mais longe deixa a pista mais realista, mas cada texel "
+                   "da sombra fica maior (use qualidade Alta junto).",
+                   [this, sel](int d) {
+                     settings.shadowDist = dists[std::max(0, std::min(4, sel + d))];
+                     changed(false);
+                   });
+      }
+      {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%.1f×", settings.shadowSoft);
+        settingRow(x, right, y, "Suavidade das sombras", buf,
+                   "Borda das sombras: valores baixos deixam a sombra nítida; altos, mais suave e difusa (como em fim de tarde).",
+                   [this](int d) {
+                     settings.shadowSoft = std::fmax(0.5f, std::fmin(3.f, std::round((settings.shadowSoft + d * 0.25f) * 4) / 4));
+                     changed(false);
+                   });
       }
       settingRow(x, right, y, "Brilho (bloom)", settings.bloom ? "Ligado" : "Desligado", "Brilho ao redor das luzes e dos reflexos fortes.",
                  [this](int) { settings.bloom = !settings.bloom; changed(); });
@@ -1763,6 +1826,7 @@ class App {
   Button play, cineBtn, raceBtn, backBtn;
   std::vector<MapCard> mapCards;
   int selectedMap = 0;
+  TexturePtr skyThumb[2];  // miniaturas do céu de dia e do pôr do sol
   bool mapPage = false;
   Transition pageT{0, 0.35f};
   int selectedCard = -1, loadingCard = -1;
@@ -1846,8 +1910,22 @@ int main(int argc, char** argv) {
       SDL_Event e;
       while (SDL_PollEvent(&e)) app.event(e);
       Uint64 now = SDL_GetPerformanceCounter();
-      float dt = std::min(0.05f, (float)((now - last) / (double)SDL_GetPerformanceFrequency()));
+      double raw = (now - last) / (double)SDL_GetPerformanceFrequency();
       last = now;
+      // com VSync a tela mostra um quadro a cada 1/Hz exato, mas o relógio do processador oscila
+      // alguns ms em volta disso; avançar o jogo pelo tempo "ruidoso" faz a paisagem andar
+      // desigual nas curvas (céu e chão tremendo). Encaixa no múltiplo do período da tela.
+      int swap = 0;
+      SDL_GL_GetSwapInterval(&swap);
+      if (swap != 0) {
+        const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+        if (dm && dm->refresh_rate > 20) {
+          double period = 1.0 / dm->refresh_rate;
+          double n = std::round(raw / period);
+          if (n >= 1 && std::fabs(raw - n * period) < period * 0.3) raw = n * period;
+        }
+      }
+      float dt = std::min(0.05f, (float)raw);
       app.frame(dt);
       SDL_GL_SwapWindow(window);
     }

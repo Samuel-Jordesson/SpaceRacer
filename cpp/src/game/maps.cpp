@@ -54,6 +54,9 @@ const std::vector<MapEntry>& mapCatalog() {
       c.spawnRoad = {"asph.001", "asph_new*"};
       c.clockwise = true;
       c.gridOffset = 18;
+      c.treeReplace = {"trees1_2022*", "trees2_2022*"};
+      c.treeModel = "tree/real_tree_models.glb";
+      c.treeReplaceDist = 15;
       m.push_back(e);
     }
     return m;

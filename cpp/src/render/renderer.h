@@ -18,6 +18,7 @@ struct DirectionalLight {
   int mapSize = 2048;
   float left = -5, right = 5, top = 5, bottom = -5, near = 0.5f, far = 500;
   float bias = 0, normalBias = 0;
+  float softness = 1;  // raio do filtro PCF em texels (borda da sombra)
   // GPU
   GLuint fbo = 0, depthTex = 0;
   int allocated = 0;
@@ -26,10 +27,13 @@ struct DirectionalLight {
 };
 
 struct Fog {
-  enum Type { None, Linear, Exp2 } type = None;
+  // Atmosphere: exponencial com queda pela altura e brilho na direção do sol
+  enum Type { None, Linear, Exp2, Atmosphere } type = None;
   vec3 color;
   float near = 1, far = 1000, density = 0.00025f;
-};
+  float base = 0, falloff = 0.01f;  // Atmosphere: altura de referência (m) e queda por metro
+  vec3 sunColor;
+}; 
 
 struct RenderContext {
   mat4 view, proj;

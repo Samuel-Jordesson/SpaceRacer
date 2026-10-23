@@ -67,5 +67,5 @@ class PostFX {
   GLuint pingFbo[2] = {0, 0}, pingTex[2] = {0, 0};
   GLuint finalFbo = 0, finalTex = 0;
 
-  std::unique_ptr<Shader> aoShader, aoBlur, aoComposite, highPass, blur[5], bloomComposite, copyAdd, bokehShader, output, finalShader, copyShader;
+  std::unique_ptr<Shader> aoShader, aoBlur, aoComposite, highPass, blur[5], bloomComposite, copyAdd, bokehShader, output, finalShader, copyShader, resolveShader;
 };

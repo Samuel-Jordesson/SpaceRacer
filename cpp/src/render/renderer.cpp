@@ -81,6 +81,8 @@ uniform float uEnvMips, uSceneEnvIntensity;
 uniform int uFogType;
 uniform vec3 uFogColor;
 uniform float uFogNear, uFogFar, uFogDensity;
+uniform float uFogBase, uFogFalloff;  // neblina atmosférica: altura de referência e queda com a altura
+uniform vec3 uFogSunColor;
 uniform int uDebug;
 
 vec2 uvc(int ch) { return ch == 1 ? vUv1 : vUv0; }
@@ -142,13 +144,16 @@ float getShadow(vec3 n) {
   vec2 f = fract(uv * uShadowMapSize + 0.5);
   uv -= f * texelSize;
   float z = sc.z;
-  return (cmp(uv, z) + cmp(uv + vec2(dx, 0.0), z) + cmp(uv + vec2(0.0, dy), z) + cmp(uv + texelSize, z) +
+  // perto da borda do quadrado coberto pelo mapa a sombra some aos poucos (sem corte seco)
+  float edge = min(min(sc.x, 1.0 - sc.x), min(sc.y, 1.0 - sc.y));
+  float fade = smoothstep(0.0, 0.08, edge);
+  return mix(1.0, (cmp(uv, z) + cmp(uv + vec2(dx, 0.0), z) + cmp(uv + vec2(0.0, dy), z) + cmp(uv + texelSize, z) +
     mix(cmp(uv + vec2(-dx, 0.0), z), cmp(uv + vec2(2.0 * dx, 0.0), z), f.x) +
     mix(cmp(uv + vec2(-dx, dy), z), cmp(uv + vec2(2.0 * dx, dy), z), f.x) +
     mix(cmp(uv + vec2(0.0, -dy), z), cmp(uv + vec2(0.0, 2.0 * dy), z), f.y) +
     mix(cmp(uv + vec2(dx, -dy), z), cmp(uv + vec2(dx, 2.0 * dy), z), f.y) +
     mix(mix(cmp(uv + vec2(-dx, -dy), z), cmp(uv + vec2(2.0 * dx, -dy), z), f.x),
-        mix(cmp(uv + vec2(-dx, 2.0 * dy), z), cmp(uv + vec2(2.0 * dx, 2.0 * dy), z), f.x), f.y)) * (1.0 / 9.0);
+        mix(cmp(uv + vec2(-dx, 2.0 * dy), z), cmp(uv + vec2(2.0 * dx, 2.0 * dy), z), f.x), f.y)) * (1.0 / 9.0), fade);
 }
 
 // quadro tangente por derivadas (getTangentFrame do three)
@@ -176,7 +181,11 @@ void main() {
     s.rgb *= mix(0.82, 1.12, macro) * mix(1.0, 0.86, patches);
     diffuseColor *= s;
   } else if (uMapUv >= 0) {
-    diffuseColor *= texture(tMap, uvc(uMapUv) * uMapRepeat);
+    vec2 muv = uvc(uMapUv) * uMapRepeat;
+    diffuseColor *= texture(tMap, muv);
+    // recortes (folhas, cercas): a média dos mipmaps derrete o alfa e a vegetação some/pisca
+    // ao longe; compensa conforme o nível de mip usado
+    if (uAlphaTest > 0.0) diffuseColor.a *= 1.0 + max(0.0, textureQueryLod(tMap, muv).x) * 0.25;
   }
   if (uHasDetail == 1) diffuseColor.rgb *= texture(tDetail, vWorldPos.xz / uDetailScale).rgb * uDetailGain;
   if (uAlphaTest > 0.0 && uAlphaToCoverage) {
@@ -213,6 +222,7 @@ void main() {
     vec3 nonPerturbedNormal = normal;
 
     float roughnessFactor = uRoughness, metalnessFactor = uMetalness;
+    float normalVariance = 0.0;
     if (asphalt) {
       float rA = texture(tMr, uvA()).g, rB = texture(tMr, uvB()).g;
       roughnessFactor *= clamp(mix(rA, rB, blendW() * 0.6) * mix(0.85, 1.05, fbm(vUv0 * 0.02 + 3.0)), 0.35, 1.0);
@@ -227,6 +237,9 @@ void main() {
       }
       if (uNormalUv >= 0) {
         vec3 mapN = texture(tNormal, uvc(uNormalUv)).xyz * 2.0 - 1.0;
+        // Toksvig: normal média encurtada no mipmap = relevo que não cabe no pixel → mais rugosidade
+        float nlen = clamp(length(mapN), 0.0, 1.0);
+        normalVariance = (1.0 - nlen) / max(nlen, 1e-3);
         vec2 ns = uNormalScale;
         if (uFlipNormalY && !uHasTangents) ns.y = -ns.y;
         mapN.xy *= ns;
@@ -249,6 +262,15 @@ void main() {
     vec3 dxy = max(abs(dFdx(nonPerturbedNormal)), abs(dFdy(nonPerturbedNormal)));
     float geometryRoughness = max(max(dxy.x, dxy.y), dxy.z);
     float roughness = min(max(roughnessFactor, 0.0525) + geometryRoughness, 1.0);
+    // anti-serrilhado de reflexo (Kaplanyan/Tokuyoshi): variação da normal final no pixel vira
+    // rugosidade extra, então o brilho do sol em bordas e frisos não "cintila" ao longe
+    {
+      vec3 ndx = dFdx(normal), ndy = dFdy(normal);
+      float variance = 0.25 * (dot(ndx, ndx) + dot(ndy, ndy)) + normalVariance * 0.5;
+      float kernel = min(2.0 * variance, 0.18);
+      float a2 = clamp(pow2(pow2(roughness)) + kernel, 0.0, 1.0);
+      roughness = max(roughness, sqrt(sqrt(a2)));
+    }
     vec3 specularColor;
     float specularF90;
     if (uPhysical) {
@@ -350,6 +372,22 @@ void main() {
   if (uDebug == 2) { vec3 nn = normalize(vNormal) * (uDoubleSided && !gl_FrontFacing ? -1.0 : 1.0); col.rgb = nn * 0.5 + 0.5; }
   if (uFogType == 1) col.rgb = mix(col.rgb, uFogColor, smoothstep(uFogNear, uFogFar, vViewDepth));
   else if (uFogType == 2) col.rgb = mix(col.rgb, uFogColor, 1.0 - exp(-uFogDensity * uFogDensity * vViewDepth * vViewDepth));
+  else if (uFogType == 3) {
+    // neblina atmosférica: densidade cai exponencialmente com a altura (vales mais enevoados),
+    // integrada ao longo do raio câmera → ponto; perto do sol a névoa fica dourada (dispersão)
+    vec3 rd = vWorldPos - uCamPos;
+    float dist = length(rd);
+    float k = uFogFalloff;
+    float h0 = uCamPos.y - uFogBase;
+    float ky = k * rd.y;
+    float integ = abs(ky) > 1e-4 ? (1.0 - exp(-ky)) / ky : 1.0;
+    float amount = uFogDensity * exp(-k * h0) * dist * integ;
+    float f = 1.0 - exp(-max(amount, 0.0));
+    vec3 dir = rd / max(dist, 1e-4);
+    float sunAmt = uHasLight ? pow(max(dot(dir, uLightDir), 0.0), 6.0) : 0.0;
+    vec3 fogCol = mix(uFogColor, uFogSunColor, sunAmt);
+    col.rgb = mix(col.rgb, fogCol, f);
+  }
   fragColor = col;
 }
 )";
@@ -398,7 +436,11 @@ uniform float uIntensity;
 out vec4 fragColor;
 void main() {
   vec3 d = normalize(vDir - uCamPos);
-  fragColor = vec4(textureLod(tSky, equirectUv(d), 0.0).rgb * uIntensity, 1.0);
+  // nível de mip pelo ângulo que o pixel cobre (derivada da direção, sem a costura do atan):
+  // sem isso a imagem 2K reduzida para a tela cintila nas bordas das nuvens quando a câmera mexe
+  float ang = max(length(dFdx(d)), length(dFdy(d)));
+  float lod = max(0.0, log2(ang * float(textureSize(tSky, 0).x) * 0.15915494));
+  fragColor = vec4(textureLod(tSky, equirectUv(d), lod).rgb * uIntensity, 1.0);
 }
 )";
 
@@ -541,7 +583,9 @@ void Renderer::setSceneUniforms(Scene& scene, const RenderContext& ctx) {
       s.set("uShadowMatrix", L->shadowMatrix);
       s.set("uShadowBias", L->bias);
       s.set("uShadowNormalBias", L->normalBias);
-      s.set("uShadowMapSize", vec2((float)L->mapSize, (float)L->mapSize));
+      // suavidade: o filtro trabalha numa grade de texels "maiores" (raio maior = borda mais suave)
+      float eff = (float)L->mapSize / std::max(0.25f, L->softness);
+      s.set("uShadowMapSize", vec2(eff, eff));
     }
   } else {
     s.set("uHasShadow", false);
@@ -565,6 +609,9 @@ void Renderer::setSceneUniforms(Scene& scene, const RenderContext& ctx) {
   s.set("uFogNear", ctx.fog.near);
   s.set("uFogFar", ctx.fog.far);
   s.set("uFogDensity", ctx.fog.density);
+  s.set("uFogBase", ctx.fog.base);
+  s.set("uFogFalloff", ctx.fog.falloff);
+  s.set("uFogSunColor", ctx.fog.sunColor);
 }
 
 static int bindTex(const TexRef& t, int unit) {
@@ -712,8 +759,12 @@ void Renderer::render(Scene& scene, const Camera& camera, int vw, int vh, const 
     scene.backgroundTex->upload();
     Shader& sk = *skyShader;
     sk.use();
-    sk.set("uInvViewProj", (ctx.proj * ctx.view).inverse());
-    sk.set("uCamPos", ctx.camPos);
+    // só a rotação da câmera: com a translação (coordenadas de milhares de metros em Spa) e
+    // near 0,1 / far 12000, a inversa em float perde precisão e o céu treme a cada quadro
+    mat4 viewRot = ctx.view;
+    viewRot.e[12] = viewRot.e[13] = viewRot.e[14] = 0;
+    sk.set("uInvViewProj", (ctx.proj * viewRot).inverse());
+    sk.set("uCamPos", vec3(0, 0, 0));
     sk.set("uIntensity", scene.backgroundIntensity);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, scene.backgroundTex->id);

@@ -59,7 +59,14 @@ void CameraRig::update(float dt, Node& carObj, Node& visual, const phys::Vehicle
       cam.position.x += std::sin(t * 37.1f) * std::sin(t * 11.3f) * amp;
       cam.position.y += std::sin(t * 43.7f + 1.3f) * std::sin(t * 7.9f) * amp;
     }
-    if (cam.position.y < 0.3f) cam.position.y = 0.3f;
+    // não entra no chão: altura do terreno logo abaixo da câmera (a pista sobe e desce
+    // dezenas de metros, então nada de limite fixo em y)
+    float floorY = p.y - 1.0f;
+    if (ground) {
+      phys::GroundQuery gq = ground->heightNear(cam.position.x, cam.position.z, cam.position.y + 2.0);
+      if (std::isfinite(gq.h) && std::fabs(gq.h - p.y) < 15) floorY = (float)gq.h;
+    }
+    if (cam.position.y < floorY + 0.3f) cam.position.y = floorY + 0.3f;
     cam.lookAt(p + vec3(0, 0.75f, 0) + back * -1.5f);
     cam.fov = 58 + std::min(14.f, kmh / 22);
   } else {
