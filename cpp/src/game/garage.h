@@ -57,6 +57,9 @@ class Garage {
   Cinematic* cine = nullptr;
   bool active = false;
   float intro = 1, baseDist = 7.2f;
+  float lensShift = 0;  // deslocamento horizontal da imagem (NDC)
+  bool shopView = false;  // oficina aberta: carro menor e mais ao centro
+  float zoomOut = 0;
   float carScale = 1;  // comprimento do carro em relação a um GT3 típico (4,6 m)
   void updateDistance();
   int winW = 1, winH = 1;

@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <initializer_list>
+#include <cmath>
 #include <set>
 #include <string>
 
@@ -32,6 +33,11 @@ class Input {
   // estilo dos ícones do controle conectado (Xbox, PlayStation ou genérico)
   PadStyle padStyle() const;
   bool hasPad() const { return pad != nullptr || forced(); }
+  SDL_Gamepad* gamepad() const { return pad; }
+  // redução fixa do ângulo máximo com a velocidade (0 = direta, como num volante); igual ao
+  // "speed sensitivity" dos simuladores para controle/teclado. Não reage ao carro escorregando.
+  float steerSens = 0.4f;
+  float steerLimit(float kmh) const { return 1 / (1 + steerSens * 2.5f * std::pow(std::max(0.f, kmh) / 120, 1.3f)); }
   // teste sem controle físico: SR_PAD=xbox|ps|generic
   static bool forced() { return SDL_getenv("SR_PAD") != nullptr; }
   bool preferPad() const { return source == "controle" || forced(); }

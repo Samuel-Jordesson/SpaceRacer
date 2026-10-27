@@ -38,6 +38,8 @@ struct MapCfg {
 
 struct MapEntry {
   std::string id, name, country, category, model, thumb;
+  std::string city, description, outline;  // tela de escolha: cidade, texto e desenho do traçado
+  std::string length, turns;               // "7,004 km", "19 curvas"
   bool flat = false;  // pista de teste: chão de asfalto infinito
   std::vector<std::pair<std::string, std::string>> figures;
   MapCfg cfg;
@@ -85,8 +87,20 @@ class TrackMap {
   // árvores 3D perto da câmera, cartaz original longe dela (chame a cada quadro)
   void updateLod(const vec3& cam);
 
+  // traçado da corrida (linha central do asfalto, fechada), começando na linha de largada
+  std::vector<vec3> line;
+  std::vector<float> lineS;     // distância acumulada de cada ponto
+  std::vector<float> lineHalfW; // meia largura do asfalto em cada ponto
+  float lineLen = 0;
+  bool hasLine() const { return lineLen > 500; }
+  // ponto do traçado mais perto de p (procura perto de hint; −1 = no traçado todo) e a distância ao longo dele
+  int nearestOnLine(const vec3& p, int hint, float* s = nullptr) const;
+  vec3 lineAt(float s) const;   // posição a uma distância s (dá a volta)
+  vec3 lineDir(float s) const;  // direção do traçado em s
+
  private:
   void replaceTrees(const MapCfg& cfg, const std::vector<NodePtr>& meshes);
+  void buildRaceLine(const vec3& start, const vec3& dir);
   struct TreeCell {
     float x, z;
     NodePtr near, far;

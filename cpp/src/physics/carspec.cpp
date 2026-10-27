@@ -15,11 +15,38 @@ CarSpec FERRARI_296_GT3 = [] {
   // Geometria padrão (substituída pelas medidas reais do modelo 3D ao carregar).
   s.geometry = {2.66, 1.70, 1.66, 0.345, 0.355};
   // k = taxa na roda (N/m), amortecedor bump/rebound (N·s/m), barra estabilizadora (N/m)
-  s.suspension.front = {150000, 6500, 9500, 55000, 0.055};
-  s.suspension.rear = {165000, 7000, 10500, 40000, 0.060};
+  // Suspensão dianteira
+s.suspension.front = {
+    150000,  // Rigidez da mola
+    6500,    // Amortecimento na compressão
+    9500,    // Amortecimento na extensão
+    55000,   // Barra estabilizadora dianteira
+    0.055    // Curso adicional
+};
+
+// Suspensão traseira
+s.suspension.rear = {
+    165000,  // Rigidez da mola
+    7000,    // Amortecimento na compressão
+    10500,   // Amortecimento na extensão
+    34000,   // Barra estabilizadora traseira: antes 40000
+    0.060    // Curso adicional
+};
   s.suspension.bumpStopK = 1.2e6;
   // Pirelli P Zero DHF (slick). Pacejka "Magic Formula" com escorregamento combinado.
-  s.tire = {1.62, 3800, -0.11, 0.085, 6.5, 1.40, 0.10, 1.05, 0.012, 1.10, 1.35};
+  s.tire = {
+    1.70,   // mu: coeficiente de atrito de referência
+    3800,   // fz0: carga de referência
+    -0.11,  // sensibilidade à carga
+    0.085,  // slipRatioPeak
+    6.5,    // slipAnglePeakDeg
+    1.40,   // C
+    0.10,   // E
+    1.05,   // longScale
+    0.012,  // rollingResistance
+    1.10,   // inertiaFront
+    1.35    // inertiaRear
+};
   s.brakes = {3300, 1900, 2600, 1800, 25, 0.01, 0.0012};
   s.engine.cylinders = 6;
   s.engine.idleRpm = 1200;

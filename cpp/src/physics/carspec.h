@@ -49,6 +49,10 @@ struct Steering {
 
 struct Assists {
   bool abs = true, tc = true, autoGearbox = true;
+  // Auxílios que não existem num carro de corrida (desligados: o carro faz o que o piloto manda):
+  //  smoothInput: rampas no volante, acelerador e freio dentro da física (a entrada já faz isso)
+  //  stability:   contra-esterço automático e alívio do acelerador quando a traseira escapa
+  bool smoothInput = false, stability = false;
 };
 
 // sistema híbrido (opcional)

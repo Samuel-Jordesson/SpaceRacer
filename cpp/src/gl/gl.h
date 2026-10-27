@@ -21,6 +21,7 @@
   X(PFNGLTEXPARAMETERIPROC, glTexParameteri) X(PFNGLTEXPARAMETERFPROC, glTexParameterf)                 \
   X(PFNGLTEXPARAMETERFVPROC, glTexParameterfv) X(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap)             \
   X(PFNGLTEXIMAGE2DMULTISAMPLEPROC, glTexImage2DMultisample)                                            \
+  X(PFNGLTEXIMAGE3DPROC, glTexImage3D) X(PFNGLTEXSUBIMAGE3DPROC, glTexSubImage3D)                       \
   X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) X(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers)   \
   X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D) \
   X(PFNGLFRAMEBUFFERRENDERBUFFERPROC, glFramebufferRenderbuffer)                                        \
@@ -93,6 +94,8 @@ SR_GL_FUNCS(SR_DECLARE)
 #define glTexParameterfv sr_glTexParameterfv
 #define glGenerateMipmap sr_glGenerateMipmap
 #define glTexImage2DMultisample sr_glTexImage2DMultisample
+#define glTexImage3D sr_glTexImage3D
+#define glTexSubImage3D sr_glTexSubImage3D
 #define glGenFramebuffers sr_glGenFramebuffers
 #define glDeleteFramebuffers sr_glDeleteFramebuffers
 #define glBindFramebuffer sr_glBindFramebuffer

@@ -88,6 +88,21 @@ struct Material {
   TexRef detailMap;
   float detailScale = 4;  // metros por repetição
   float detailGain = 1;   // compensa a base clara
+  // adesivos da oficina projetados na carroceria (compartilhados pelos materiais da pintura)
+  std::shared_ptr<struct DecalSet> decals;
+};
+
+// até 8 adesivos: matriz espaço do carro → (u, v, profundidade) e camada da textura em camadas
+struct DecalSet {
+  static constexpr int MAX = 8;
+  unsigned array = 0;  // GL_TEXTURE_2D_ARRAY
+  int count = 0;
+  mat4 mats[MAX];
+  vec4 info[MAX];      // x = camada, y = espelhar no outro lado
+  struct Node* space = nullptr;  // o carro (frente = −z, chão = 0)
+  std::vector<std::string> files;  // imagem de cada camada
+  std::vector<float> aspects;      // largura/altura de cada imagem
+  ~DecalSet();
 };
 using MaterialPtr = std::shared_ptr<Material>;
 

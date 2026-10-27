@@ -18,6 +18,7 @@
 #include "hud.h"
 #include "settings.h"
 #include "input.h"
+#include "workshop.h"
 #include "world.h"
 
 class Game {
@@ -43,7 +44,12 @@ class Game {
     if (!hud) return;
     hud->prompt = input.preferPad() && input.hasPad() ? input.padStyle() : PadStyle::Keyboard;
     hud->draw(ui, 1);
+    drawRace(ui);
   }
+  // corrida: 0 livre, 1 contra o tempo, 2 contra a IA (definido antes de start)
+  struct RaceCfg { int mode = 0, laps = 3, opponents = 5; };
+  RaceCfg race;
+  std::string playerCarId;  // para não repetir o carro do jogador entre os adversários
   bool hudClick(float x, float y) { return hud && hud->click(x, y); }
   void mouseDown(int button, float x, float y) { rig.orbit.pointerDown(button, x, y); }
   void mouseMove(float x, float y, float viewH) { rig.orbit.pointerMove(x, y, viewH); }
@@ -82,6 +88,47 @@ class Game {
   std::unique_ptr<phys::Vehicle> car;
   NodePtr carObj, visual;
   const CarEntry* entry = nullptr;
+  phys::CarSpec tuned;
+  // --- corrida (race.cpp)
+  enum class Phase { Free, Countdown, Running, Finished };
+  Phase phase = Phase::Free;
+  struct Racer {
+    std::string name;
+    phys::Vehicle* car = nullptr;
+    int seg = -1;
+    float s = 0;
+    int laps = -1;
+    double lapStart = 0, lastLap = 0, bestLap = 0, finish = -1;
+    float stuck = 0;
+  };
+  struct Bot {
+    std::unique_ptr<phys::Vehicle> car;
+    NodePtr obj, visual;
+    std::shared_ptr<LoadedCar> model;
+    float lane = 0, skill = 1;
+    phys::Controls ctl;
+    const CarEntry* entry = nullptr;
+    std::vector<float> plan;  // velocidade planejada em cada ponto do traçado para este carro (m/s)
+    vec3 color{1, 1, 1};      // cor no minimapa
+  };
+  std::vector<Racer> racers;  // [0] = jogador
+  std::vector<Bot> bots;
+  std::vector<const CarEntry*> oppPlan;                      // carro de cada adversário
+  std::map<std::string, std::shared_ptr<LoadedCar>> oppModels;  // modelos já carregados
+  std::vector<std::pair<std::string, std::shared_ptr<LoadedCar>>> oppLoaded;  // carregados na outra thread
+  double raceClock = 0;
+  float countdown = 0;
+  bool resultsOpen = false;
+  bool raceActive() const;
+  void raceStart();
+  void raceStop();
+  void raceUpdate(float dt);
+  void raceAfterPhysics(float dt);
+  void botDrive(Bot& b, Racer& r);
+  void collideCars();
+  void syncBots();
+  void drawRace(UI& ui);
+  void placeOnLine(phys::Vehicle& v, float s, float lat);
   std::shared_ptr<LoadedCar> loaded;
   double acc = 0;
   bool paused = false;

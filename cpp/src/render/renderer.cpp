@@ -64,6 +64,12 @@ uniform float uAsphaltTile;
 uniform sampler2D tDetail;
 uniform int uHasDetail;
 uniform float uDetailScale, uDetailGain;
+// adesivos da oficina (projetados no espaço do carro)
+uniform int uDecalCount;
+uniform sampler2DArray tDecal;
+uniform mat4 uDecalInv;
+uniform mat4 uDecalMat[8];
+uniform vec4 uDecalInfo[8];
 // luzes
 uniform bool uHasLight;
 uniform vec3 uLightDir, uLightColor;
@@ -188,6 +194,25 @@ void main() {
     if (uAlphaTest > 0.0) diffuseColor.a *= 1.0 + max(0.0, textureQueryLod(tMap, muv).x) * 0.25;
   }
   if (uHasDetail == 1) diffuseColor.rgb *= texture(tDetail, vWorldPos.xz / uDetailScale).rgb * uDetailGain;
+  if (uDecalCount > 0) {
+    // cada adesivo é projetado ao longo do eixo z da sua matriz; só pinta faces viradas para ele
+    vec3 lp = (uDecalInv * vec4(vWorldPos, 1.0)).xyz;
+    vec3 ln = normalize(mat3(uDecalInv) * normalize(vNormal));
+    for (int i = 0; i < 8; i++) {
+      if (i >= uDecalCount) break;
+      for (int m = 0; m < 2; m++) {
+        if (m == 1 && uDecalInfo[i].y < 0.5) break;
+        vec3 p = m == 1 ? vec3(-lp.x, lp.y, lp.z) : lp;
+        vec3 nn = m == 1 ? vec3(-ln.x, ln.y, ln.z) : ln;
+        vec3 q = (uDecalMat[i] * vec4(p, 1.0)).xyz;
+        vec3 ax = normalize(vec3(uDecalMat[i][0][2], uDecalMat[i][1][2], uDecalMat[i][2][2]));
+        if (q.x <= 0.0 || q.x >= 1.0 || q.y <= 0.0 || q.y >= 1.0 || abs(q.z) > 1.0 || dot(nn, ax) > -0.15) continue;
+        float u = m == 1 ? 1.0 - q.x : q.x;  // lado espelhado: a imagem continua legível
+        vec4 dc = texture(tDecal, vec3(u, 1.0 - q.y, uDecalInfo[i].x));
+        diffuseColor.rgb = mix(diffuseColor.rgb, dc.rgb, dc.a);
+      }
+    }
+  }
   if (uAlphaTest > 0.0 && uAlphaToCoverage) {
     // alpha-to-coverage com borda nítida: a cobertura do MSAA suaviza o recorte (folhas, cercas)
     float a = (diffuseColor.a - uAlphaTest) / max(fwidth(diffuseColor.a), 1e-4) + 0.5;
@@ -419,32 +444,49 @@ void main() {
 )";
 
 const char* SKY_VS = R"(
-uniform mat4 uInvViewProj;
+uniform mat4 uInvProj;
+uniform mat4 uInvViewRot;
 out vec3 vDir;
+
 void main() {
+  // Triangulo em tela cheia.
   vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
-  vec4 w = uInvViewProj * vec4(p, 1.0, 1.0);
-  vDir = w.xyz / w.w;
+
+  // Reconstrói um raio no espaço da câmera usando um ponto no meio
+  // do espaço de recorte, evitando depender do plano distante.
+  vec4 viewPoint = uInvProj * vec4(p, 0.0, 1.0);
+  // sem normalizar: o ponto é linear na tela e pode ser interpolado; normalizar nos vértices
+  // (que ficam bem fora da tela) entortava o céu e ele parecia girar quando a câmera virava
+  vec3 viewDir = viewPoint.xyz / viewPoint.w;
+
+  // O céu depende apenas da orientação da câmera, nunca da posição.
+  vDir = mat3(uInvViewRot) * viewDir;
+
   gl_Position = vec4(p, 1.0, 1.0);
 }
 )";
 const char* SKY_FS = R"(
 in vec3 vDir;
-uniform vec3 uCamPos;
 uniform sampler2D tSky;
 uniform float uIntensity;
 out vec4 fragColor;
+
 void main() {
-  vec3 d = normalize(vDir - uCamPos);
-  // nível de mip pelo ângulo que o pixel cobre (derivada da direção, sem a costura do atan):
-  // sem isso a imagem 2K reduzida para a tela cintila nas bordas das nuvens quando a câmera mexe
+  vec3 d = normalize(vDir);
+
+  // Filtragem baseada no tamanho angular do pixel para reduzir
+  // cintilação nos detalhes da textura HDRI quando a câmera se move.
   float ang = max(length(dFdx(d)), length(dFdy(d)));
-  float lod = max(0.0, log2(ang * float(textureSize(tSky, 0).x) * 0.15915494));
+  float lod = max(
+    0.0,
+    log2(ang * float(textureSize(tSky, 0).x) * 0.15915494)
+  );
+
   fragColor = vec4(textureLod(tSky, equirectUv(d), lod).rgb * uIntensity, 1.0);
 }
 )";
 
-enum Unit { U_MAP, U_MR, U_NORMAL, U_AO, U_EMISSIVE, U_CC, U_CCR, U_CCN, U_SPI, U_SPC, U_ENVS, U_ENVI, U_SHADOW, U_DETAIL };
+enum Unit { U_MAP, U_MR, U_NORMAL, U_AO, U_EMISSIVE, U_CC, U_CCR, U_CCN, U_SPI, U_SPC, U_ENVS, U_ENVI, U_SHADOW, U_DETAIL, U_DECAL };
 
 }  // namespace
 
@@ -457,8 +499,8 @@ Renderer::Renderer() {
   pbrShader = std::make_unique<Shader>(PBR_VS, std::string(GLSL_COMMON) + PBR_FS);
   Shader& s = *pbrShader;
   s.use();
-  const char* names[] = {"tMap", "tMr", "tNormal", "tAo", "tEmissive", "tCc", "tCcRough", "tCcNormal", "tSpecInt", "tSpecColor", "tEnvSpec", "tEnvIrr", "tShadow", "tDetail"};
-  for (int i = 0; i < 14; i++) s.set(names[i], i);
+  const char* names[] = {"tMap", "tMr", "tNormal", "tAo", "tEmissive", "tCc", "tCcRough", "tCcNormal", "tSpecInt", "tSpecColor", "tEnvSpec", "tEnvIrr", "tShadow", "tDetail", "tDecal"};
+  for (int i = 0; i < 15; i++) s.set(names[i], i);
   depthShader = std::make_unique<Shader>(DEPTH_VS, DEPTH_FS);
   depthShader->use();
   depthShader->set("tMap", 0);
@@ -671,6 +713,27 @@ void Renderer::drawMesh(Node& n, const RenderContext& ctx, Scene&, int pass) {
     s.set("uHasDetail", bindTex(m.detailMap, U_DETAIL) >= 0 ? 1 : 0);
     s.set("uDetailScale", m.detailScale);
     s.set("uDetailGain", m.detailGain);
+    const DecalSet* ds = m.decals.get();
+    bool decal = ds && ds->array && ds->count > 0 && ds->space;
+    s.set("uDecalCount", decal ? ds->count : 0);
+    if (decal) {
+      glActiveTexture(GL_TEXTURE0 + U_DECAL);
+      glBindTexture(GL_TEXTURE_2D_ARRAY, ds->array);
+      // espaço do carro sem escala (o adesivo é medido em metros)
+      vec3 dp, dsc;
+      quat dq;
+      ds->space->matrixWorld.decompose(dp, dq, dsc);
+      s.set("uDecalInv", mat4::compose(dp, dq, vec3(1)).inverse());
+      // nomes fixos: o cache de uniforms usa o ponteiro do nome
+      static const char* MATN[8] = {"uDecalMat[0]", "uDecalMat[1]", "uDecalMat[2]", "uDecalMat[3]",
+                                    "uDecalMat[4]", "uDecalMat[5]", "uDecalMat[6]", "uDecalMat[7]"};
+      static const char* INFN[8] = {"uDecalInfo[0]", "uDecalInfo[1]", "uDecalInfo[2]", "uDecalInfo[3]",
+                                    "uDecalInfo[4]", "uDecalInfo[5]", "uDecalInfo[6]", "uDecalInfo[7]"};
+      for (int i = 0; i < ds->count; i++) {
+        s.set(MATN[i], ds->mats[i]);
+        s.set(INFN[i], ds->info[i]);
+      }
+    }
     // estado
     if (m.transparent) {
       glEnable(GL_BLEND);
@@ -759,12 +822,13 @@ void Renderer::render(Scene& scene, const Camera& camera, int vw, int vh, const 
     scene.backgroundTex->upload();
     Shader& sk = *skyShader;
     sk.use();
-    // só a rotação da câmera: com a translação (coordenadas de milhares de metros em Spa) e
-    // near 0,1 / far 12000, a inversa em float perde precisão e o céu treme a cada quadro
+    // O céu usa somente a orientação da câmera. Separar a inversa da
+    // projeção da inversa da rotação evita reconstruir um ponto distante,
+    // reduzindo erros de precisão que podem fazer a textura tremer.
     mat4 viewRot = ctx.view;
     viewRot.e[12] = viewRot.e[13] = viewRot.e[14] = 0;
-    sk.set("uInvViewProj", (ctx.proj * viewRot).inverse());
-    sk.set("uCamPos", vec3(0, 0, 0));
+    sk.set("uInvProj", ctx.proj.inverse());
+    sk.set("uInvViewRot", viewRot.inverse());
     sk.set("uIntensity", scene.backgroundIntensity);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, scene.backgroundTex->id);

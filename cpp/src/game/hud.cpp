@@ -126,155 +126,56 @@ void Hud::draw(UI& ui, float fade) {
   ui.pushOpacity(fade);
   bool narrow = W <= 700;
 
-  // ---------------------------------------------------------------- canto superior esquerdo
+  // texto branco com uma sombra leve (legível sobre céu e asfalto, sem painel)
+  auto shadowText = [&](const std::string& t, float x, float y, TextStyle st) {
+    TextStyle sh = st;
+    sh.color = Color(0, 0, 0, 0.35f * st.color.a);
+    ui.text(t, x + 1, y + 1.5f, sh);
+    return ui.text(t, x, y, st);
+  };
+
+  // ---------------------------------------------------------------- dica (embaixo, discreta)
   {
-    TextStyle chip{Font::BC600, 12, 12 * 0.12f, Color::hex(0x666666)};
-    float lh = ui.lineHeightNormal(chip);
-    float x = 16, y = 16;
-    struct C { const char* t; bool on, act, always; };
-    const C chips[3] = {{"ABS", absOn, absAct, false}, {"TC", tcOn, tcAct, false}, {autoGb ? "AUTO" : "MANUAL", true, false, true}};
-    for (auto& c : chips) {
-      float tw = ui.measure(c.t, chip);
-      Rect r{x, y, tw + 16, lh + 6};
-      ui.rect(r, c.act ? AMBER : PANEL, 4);
-      TextStyle st = chip;
-      st.color = c.act ? Color::hex(0x111111) : c.always ? FG : c.on ? Color::hex(0x7ee07e) : Color::hex(0x666666);
-      ui.text(c.t, x + 8, y + 3, st, lh);
-      x += r.w + 6 + 4;  // margem de 6 px + espaço entre inline-blocks
-    }
-    TextStyle small{Font::Barlow400, 12, 12 * 0.04f, DIM, true};
-    ui.text(cam + " · " + inputSrc + " · " + fps, 16, y + lh + 6 + 6, small);
+    TextStyle st{Font::Barlow400, 11, 11 * 0.08f, Color(1, 1, 1, 0.45f)};
+    std::string hint = prompt == PadStyle::Keyboard ? "H controles  ·  Esc garagem" : "↑ controles  ·  View garagem";
+    shadowText(hint, (W - ui.measure(hint, st)) / 2, H - 26, st);
   }
 
-  // ---------------------------------------------------------------- dica
+  // ---------------------------------------------------------------- velocímetro (canto inferior direito)
   {
-    TextStyle st{Font::Barlow400, 12, 12 * 0.04f, DIM};
-    if (prompt == PadStyle::Keyboard) {
-      std::string hint = "H controles · Esc garagem";
-      ui.text(hint, W - 16 - ui.measure(hint, st), 16, st);
-    } else {
-      // [↑] controles   [View] garagem
-      PromptTheme dk{true};
-      float w = promptWidth(ui, prompt, PadButton::DPadUp, 16, "") + 6 + ui.measure("controles", st) + 16 +
-                promptWidth(ui, prompt, PadButton::Select, 18, "") + 6 + ui.measure("garagem", st);
-      float x = W - 16 - w, cy = 16 + 8;
-      x += drawPrompt(ui, prompt, PadButton::DPadUp, x, cy, 16, "", dk) + 6;
-      x += ui.text("controles", x, 16, st) + 16;
-      x += drawPrompt(ui, prompt, PadButton::Select, x, cy, 18, "", dk) + 6;
-      ui.text("garagem", x, 16, st);
-    }
-  }
-
-  // ---------------------------------------------------------------- painel central
-  {
-    float dw = std::min(520.f, W - 32), dh = 124;
-    Rect d{(W - dw) / 2, H - 18 - dh, dw, dh};
-    ui.blurPanel(d, PANEL, 12);
-    float ix = d.x + 14, iw = dw - 28, y = d.y + 10;
-    // luzes de troca
-    float lw = 10 * 22 + 9 * 6, lx = ix + (iw - lw) / 2;
-    for (int i = 0; i < 10; i++) {
-      Rect r{lx + i * 28.f, y, 22, 8};
-      Color c = Color::hex(0x222222);
-      bool glow = false;
-      if (blink) { c = BLUE; glow = true; }
-      else if (i < lit) { c = i < 4 ? GREEN : i < 8 ? RED : BLUE; glow = true; }
-      if (glow) ui.shadow(r, c, 0, 0, blink ? 12.f : 8.f, 0, 4);
-      ui.rect(r, c, 4);
-    }
-    y += 16;
-    // conta-giros: o gradiente é escalado junto com o preenchimento
-    Rect bar{ix, y, iw, 14};
-    ui.rect(bar, TRACK, 7);
-    float fw = iw * rpmFill;
-    if (fw > 0.5f) {
-      const float stops[4] = {0, 0.7f, 0.85f, 1};
-      const Color cols[4] = {Color::hex(0xdddddd), Color::hex(0xffffff), AMBER, RED};
-      for (int s = 0; s < 3; s++) {
-        Rect q{ix + fw * stops[s], y, fw * (stops[s + 1] - stops[s]) + 0.5f, 14};
-        ui.rectInside(q, bar, 7, cols[s], cols[s + 1]);
+    float R = narrow ? 64.f : 84.f, cx = W - (narrow ? 90.f : 130.f), cy = H - (narrow ? 96.f : 124.f);
+    // arco de 270° (de baixo-esquerda, por cima, até baixo-direita) = giro do motor
+    const float a0 = 0.75f * (float)M_PI, span = 1.5f * (float)M_PI;
+    auto arc = [&](float f0, float f1, float w, const Color& c) {
+      int n = std::max(2, (int)((f1 - f0) * 90));
+      for (int i = 0; i < n; i++) {
+        float t0 = a0 + span * (f0 + (f1 - f0) * i / n), t1 = a0 + span * (f0 + (f1 - f0) * (i + 1) / n);
+        ui.line(cx + std::cos(t0) * R, cy + std::sin(t0) * R, cx + std::cos(t1) * R, cy + std::sin(t1) * R, w, c);
       }
-    }
-    // número do rpm (mix-blend-mode: difference) → escuro sobre o preenchimento, claro sobre o fundo
-    {
-      TextStyle st{Font::BC600, 11, 11 * 0.06f, Color::hex(0x111111), true};
-      std::string t = std::to_string(rpmText);
-      float tw = ui.measure(t, st), tx = ix + iw - 8 - tw, ty = y - 1;
-      float split = ix + fw;
-      ui.pushClip({ix, y - 4, std::max(0.f, split - ix), 20});
-      ui.text(t, tx, ty, st);
-      ui.popClip();
-      ui.pushClip({split, y - 4, std::max(0.f, ix + iw - split), 20});
-      st.color = Color::hex(0xd3d1cc);
-      ui.text(t, tx, ty, st);
-      ui.popClip();
-    }
-    y += 14 + 8;
-    // linha principal: pedais, marcha, velocidade, volante (space-between)
-    float rowH = 64, cy = y + rowH / 2;
-    float wPed = 48, wGear = 70, wSpeed = 120, wSteer = 54;
-    float gap = std::max(12.f, (iw - wPed - wGear - wSpeed - wSteer) / 3);
-    float x = ix;
-    // pedais
-    const float vals[3] = {clutch, brk, thr};
-    const Color pc[3] = {BLUE, RED, GREEN};
+    };
+    arc(0, 0.86f, 2, Color(1, 1, 1, 0.38f));
+    arc(0.86f, 1, 3, Color::hex(0xe8102a, 0.85f));  // faixa vermelha (corte de giro)
+    float f = std::clamp(rpmFill, 0.f, 1.f);
+    if (f > 0.002f) arc(0, std::min(f, 0.86f), 3, Color(1, 1, 1, 0.95f));
+    if (f > 0.86f) arc(0.86f, f, 4, Color::hex(0xff2a40));
+    // marcha grande, linha fina, velocidade e unidade
+    TextStyle gs{Font::Barlow300, narrow ? 44.f : 58.f, 0, shifting ? AMBER : Color(1, 1, 1, 1), true};
+    float gw = ui.measure(gear, gs);
+    shadowText(gear, cx - gw / 2, cy - (narrow ? 50.f : 64.f), gs);
+    ui.rect({cx - R * 0.42f, cy + 2, R * 0.84f, 1}, Color(1, 1, 1, 0.45f));
+    TextStyle sp{Font::Barlow400, narrow ? 24.f : 30.f, 0, Color(1, 1, 1, 1), true};
+    std::string sv = std::to_string(speed);
+    shadowText(sv, cx - ui.measure(sv, sp) / 2, cy + 8, sp);
+    TextStyle un{Font::Barlow400, 11, 0.5f, Color(1, 1, 1, 0.75f)};
+    shadowText("km/h", cx - ui.measure("km/h", un) / 2, cy + (narrow ? 36.f : 44.f), un);
+    // auxílios à esquerda do arco: aceso = ligado, âmbar = agindo agora
+    TextStyle as{Font::Barlow500, 11.5f, 0.8f, Color(1, 1, 1, 1)};
+    struct A { const char* t; bool on, act; };
+    const A aids[3] = {{"ABS", absOn, absAct}, {"TCS", tcOn, tcAct}, {autoGb ? "AUTO" : "MAN", true, false}};
+    float ax = cx - R - 46, ay = cy - 8;
     for (int i = 0; i < 3; i++) {
-      Rect r{x + i * 18.f, cy - 29, 12, 58};
-      ui.rect(r, TRACK, 3);
-      float hh = 58 * std::max(0.f, std::min(1.f, vals[i]));
-      if (hh > 0.3f) ui.rectInside({r.x, r.y + 58 - hh, 12, hh}, r, 3, pc[i], pc[i]);
-    }
-    x += wPed + gap;
-    // marcha
-    {
-      TextStyle st{Font::BC600, 74, 0, shifting ? AMBER : FG, true};
-      float tw = ui.measure(gear, st);
-      ui.text(gear, x + (wGear - tw) / 2, cy - 37, st, 74);
-    }
-    x += wGear + gap;
-    // velocidade
-    {
-      TextStyle sp{Font::BC600, 54, 0, FG, true};
-      TextStyle un{Font::BC500, 11, 11 * 0.2f, DIM};
-      float unitH = ui.lineHeightNormal(un), boxH = 54 + unitH, top = cy - boxH / 2;
-      std::string s = std::to_string(speed);
-      ui.text(s, x + wSpeed - ui.measure(s, sp), top, sp, 54);
-      ui.text("KM/H", x + wSpeed - ui.measure("KM/H", un), top + 54, un);
-    }
-    x += wSpeed + gap;
-    // volante
-    {
-      float cx = x + 27;
-      ui.ring(cx, cy, 25, 4, Color::hex(0x555555));
-      // marcador vermelho no topo, girando com o esterço (270° por unidade)
-      Rect m{cx - 2, cy - 27 - 4, 4, 12};
-      ui.rotatedRect(m, cx, cy, steer * 270 * (float)M_PI / 180, RED, 2);
-    }
-  }
-
-  // ---------------------------------------------------------------- canto inferior direito
-  if (!narrow) {
-    Rect p{W - 16 - 240, H - 18 - 150, 240, 150};
-    ui.rect(p, PANEL, 12);
-    // medidor de G (canvas 130×130)
-    float gx0 = p.x + 10, gy0 = p.y + 10;
-    float cx = gx0 + 65, cy = gy0 + 65, R = 65 - 6, sc = R / 2.5f;
-    Color grid(1, 1, 1, 0.18f);
-    for (int r = 1; r <= 2; r++) ui.ring(cx, cy, r * sc, 1, grid);
-    ui.line(cx - R, cy, cx + R, cy, 1, grid);
-    ui.line(cx, cy - R, cx, cy + R, 1, grid);
-    for (auto& [x, z] : trail) ui.circle(cx + x * sc, cy - z * sc, 2, Color(1, 80 / 255.f, 60 / 255.f, 0.25f));
-    ui.circle(cx + gx * sc, cy - gz * sc, 4.5f, Color::hex(0xff5a3c));
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%.2f g", std::hypot(gx, gz));
-    TextStyle gs{Font::BC500, 11, 11 * 0.06f, Color(1, 1, 1, 0.7f), true};
-    ui.textBaseline(buf, gx0 + 6, gy0 + 130 - 6, gs);
-    // pneus
-    float tx = p.x + 10 + 130 + 12 + 8, ty = p.y + p.h - 10 - 122 + 8;
-    for (int i = 0; i < 4; i++) {
-      float sx = tx + (i % 2) * 40.f, sy = ty + (i / 2) * 66.f;
-      float hh = 40 * tireScale[i];
-      ui.rect({sx, sy + (40 - hh) / 2, 22, hh}, tireColor[i], 5);
+      as.color = aids[i].act ? AMBER : aids[i].on ? Color(1, 1, 1, 0.85f) : Color(1, 1, 1, 0.3f);
+      shadowText(aids[i].t, ax, ay + i * 22, as);
     }
   }
 

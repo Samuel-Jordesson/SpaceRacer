@@ -74,9 +74,14 @@ void Settings::load() {
     else if (k == "windowY") v >> windowY;
     else if (k == "windowMax") v >> windowMax;
     else if (k == "volume") v >> volume;
+    else if (k == "steerSens") v >> steerSens;
+    else if (k == "stabilityAssist") v >> stabilityAssist;
     else if (k == "lastCar") v >> lastCar;
     else if (k == "lastMap") v >> lastMap;
     else if (k == "timeOfDay") v >> timeOfDay;
+    else if (k == "raceMode") v >> raceMode;
+    else if (k == "raceLaps") v >> raceLaps;
+    else if (k == "raceOpponents") v >> raceOpponents;
   }
   // valores fora do esperado (arquivo editado à mão)
   pixelRatio = std::fmax(0.5f, std::fmin(2.0f, pixelRatio));
@@ -86,7 +91,11 @@ void Settings::load() {
   if (shadowDist != 20 && shadowDist != 40 && shadowDist != 60 && shadowDist != 100 && shadowDist != 150) shadowDist = 60;
   shadowSoft = std::fmax(0.5f, std::fmin(3.f, shadowSoft));
   volume = std::fmax(0.f, std::fmin(1.f, volume));
+  steerSens = std::fmax(0.f, std::fmin(1.f, steerSens));
   timeOfDay = std::max(0, std::min(1, timeOfDay));
+  raceMode = std::max(0, std::min(2, raceMode));
+  raceLaps = std::max(1, std::min(30, raceLaps));
+  raceOpponents = std::max(1, std::min(7, raceOpponents));
   windowW = std::max(MIN_WINDOW_W, std::min(7680, windowW));
   windowH = std::max(MIN_WINDOW_H, std::min(4320, windowH));
   matchPreset();
@@ -97,5 +106,5 @@ void Settings::save() const {
   out << "preset=" << preset << "\npixelRatio=" << pixelRatio << "\nmsaa=" << msaa << "\nao=" << ao << "\nbloom=" << bloom
       << "\nshadow=" << shadow << "\nshadowDist=" << shadowDist << "\nshadowSoft=" << shadowSoft << "\nlensFx=" << lensFx << "\nspeedBlur=" << speedBlur << "\nautoQuality=" << autoQuality
       << "\nfullscreen=" << fullscreen << "\nvsync=" << vsync << "\nwindowW=" << windowW << "\nwindowH=" << windowH
-      << "\nwindowX=" << windowX << "\nwindowY=" << windowY << "\nwindowMax=" << windowMax << "\nvolume=" << volume << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\ntimeOfDay=" << timeOfDay << "\n";
+      << "\nwindowX=" << windowX << "\nwindowY=" << windowY << "\nwindowMax=" << windowMax << "\nvolume=" << volume << "\nsteerSens=" << steerSens << "\nstabilityAssist=" << stabilityAssist << "\nlastCar=" << lastCar << "\nlastMap=" << lastMap << "\ntimeOfDay=" << timeOfDay << "\nraceMode=" << raceMode << "\nraceLaps=" << raceLaps << "\nraceOpponents=" << raceOpponents << "\n";
 }

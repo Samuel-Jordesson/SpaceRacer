@@ -29,10 +29,16 @@ struct Settings {
   bool windowMax = true;
   // som
   float volume = 1;
+  // pilotagem
+  float steerSens = 0.4f;    // sensibilidade da direção à velocidade (0..1)
+  bool stabilityAssist = false;  // contra-esterço automático (desligado = realista)
   // garagem
   std::string lastCar;  // id do último carro escolhido (abre com ele)
   std::string lastMap;  // id da última pista escolhida
   int timeOfDay = 0;    // 0 = dia, 1 = pôr do sol
+  int raceMode = 0;     // 0 corrida livre, 1 contra o tempo, 2 contra a IA
+  int raceLaps = 3;
+  int raceOpponents = 5;
 
   void applyPreset(int p);
   // depois de mudar um item: vira "personalizado" se não bater com nenhum nível

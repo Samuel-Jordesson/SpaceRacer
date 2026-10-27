@@ -35,6 +35,9 @@ void Texture::release() {
   id = 0;
 }
 Texture::~Texture() { release(); }
+DecalSet::~DecalSet() {
+  if (array) glDeleteTextures(1, &array);
+}
 
 // ---------------------------------------------------------------- geometria
 void Geometry::computeBounds() {

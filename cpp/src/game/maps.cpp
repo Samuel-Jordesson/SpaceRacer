@@ -12,6 +12,10 @@ const std::vector<MapEntry>& mapCatalog() {
       e.thumb = "assets/maps/teste.jpg";
       e.flat = true;
       e.figures = {{"Superfície", "Asfalto"}, {"Extensão", "Ilimitada"}, {"Uso", "Testes"}};
+      e.city = "Asfalto infinito";
+      e.length = "Ilimitada";
+      e.turns = "Sem traçado";
+      e.description = "Uma área de asfalto sem limites para testar o carro, o acerto da oficina, frenagens, drift e manobras à vontade.";
       m.push_back(e);
     }
     {
@@ -23,6 +27,12 @@ const std::vector<MapEntry>& mapCatalog() {
       e.model = "mapas/circuit-de-spa-francorchamps-2022-layout/source/spa.glb";
       e.thumb = "assets/maps/spa.jpg";
       e.figures = {{"Extensão", "7,004 km"}, {"Curvas", "19"}, {"Sentido", "Horário"}};
+      e.city = "Stavelot, Ardenas";
+      e.length = "7,004 km";
+      e.turns = "19 curvas";
+      e.outline = "assets/maps/spa-outline.png";
+      e.description = "O circuito mais longo do calendário, nas florestas das Ardenas: a lendária subida da Eau Rouge e "
+                      "Raidillon, a longa reta Kemmel e curvas de alta como Pouhon e Blanchimont, com clima que muda a cada volta.";
       MapCfg& c = e.cfg;
       c.textureDir = "mapas/circuit-de-spa-francorchamps-2022-layout/textures";
       // aderência por superfície (μ relativo ao asfalto) e resistência de rolagem extra
@@ -52,7 +62,7 @@ const std::vector<MapEntry>& mapCatalog() {
                     "sand*", "carpet*", "road-ext-tile*", "Parking*", "sbancamento*", "texts_new*", "diss2*", "water*"};
       c.spawnMarker = {"spa-start-lights-emissive*"};
       c.spawnRoad = {"asph.001", "asph_new*"};
-      c.clockwise = true;
+      c.clockwise = false;  // (com true os carros largavam virados para trás, contra o sentido da corrida)
       c.gridOffset = 18;
       c.treeReplace = {"trees1_2022*", "trees2_2022*"};
       c.treeModel = "tree/real_tree_models.glb";

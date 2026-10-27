@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
+#include <queue>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -13,6 +15,52 @@
 static double nowS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
 using phys::V3;
+
+// Triângulos da pista em 2D (XZ) com o tipo: 1 = asfalto da pista, 2 = limite (linha branca, zebra)
+struct SurfaceMap {
+  struct T { float ax, az, bx, bz, cx, cz; int type; };
+  std::vector<T> tris;
+  float cell = 8, minX = 0, minZ = 0;
+  int nx = 0, nz = 0;
+  std::vector<std::vector<int>> grid;
+  void build() {
+    if (tris.empty()) return;
+    float mxX = -1e30f, mxZ = -1e30f;
+    minX = minZ = 1e30f;
+    for (auto& t : tris) {
+      minX = std::min({minX, t.ax, t.bx, t.cx}); mxX = std::max({mxX, t.ax, t.bx, t.cx});
+      minZ = std::min({minZ, t.az, t.bz, t.cz}); mxZ = std::max({mxZ, t.az, t.bz, t.cz});
+    }
+    nx = (int)((mxX - minX) / cell) + 1;
+    nz = (int)((mxZ - minZ) / cell) + 1;
+    grid.assign((size_t)nx * nz, {});
+    for (int i = 0; i < (int)tris.size(); i++) {
+      auto& t = tris[i];
+      int x0 = (int)((std::min({t.ax, t.bx, t.cx}) - minX) / cell), x1 = (int)((std::max({t.ax, t.bx, t.cx}) - minX) / cell);
+      int z0 = (int)((std::min({t.az, t.bz, t.cz}) - minZ) / cell), z1 = (int)((std::max({t.az, t.bz, t.cz}) - minZ) / cell);
+      for (int z = z0; z <= z1; z++)
+        for (int x = x0; x <= x1; x++) grid[(size_t)z * nx + x].push_back(i);
+    }
+  }
+  // 0 = fora, 1 = pista, 2 = limite (o limite vence quando os dois se sobrepõem)
+  int at(float x, float z) const {
+    int gx = (int)((x - minX) / cell), gz = (int)((z - minZ) / cell);
+    if (gx < 0 || gz < 0 || gx >= nx || gz >= nz) return 0;
+    int r = 0;
+    for (int i : grid[(size_t)gz * nx + gx]) {
+      auto& t = tris[i];
+      float d1 = (x - t.bx) * (t.az - t.bz) - (t.ax - t.bx) * (z - t.bz);
+      float d2 = (x - t.cx) * (t.bz - t.cz) - (t.bx - t.cx) * (z - t.cz);
+      float d3 = (x - t.ax) * (t.cz - t.az) - (t.cx - t.ax) * (z - t.az);
+      bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+      if (neg && pos) continue;
+      if (t.type == 2) return 2;
+      r = 1;
+    }
+    return r;
+  }
+};
+static SurfaceMap g_surf;
 
 namespace {
 
@@ -370,6 +418,30 @@ void TrackMap::loadCPU(const MapEntry& entry, const std::function<void(float)>& 
   spawnPos = vec3(sp.x, h.h > -1e8 ? (float)h.h : mc.y, sp.z);
   spawnHeading = std::atan2(-dir.x, -dir.z);
   std::printf("[pista] largada em (%.1f %.1f %.1f), direção (%.2f %.2f)\n", spawnPos.x, spawnPos.y, spawnPos.z, dir.x, dir.z);
+  t0 = nowS();
+  g_surf = SurfaceMap{};
+  {
+    static const std::vector<std::string> bounds = {"line*", "kerb_new*", "CURB_B*"};
+    for (auto& m : meshes) {
+      if (!m->geometry) continue;
+      // asfalto da pista e o que é pintado/remendado em cima dele (senão viram buracos)
+      static const std::vector<std::string> onRoad = {"asph_patch_joint*", "groove*", "texts_new*", "diss2*", "doted_line*"};
+      const std::string& mn = m->material->name;
+      static const std::vector<std::string> paved = {"Parking*", "road-ext-tile*", "carpet*", "asph*"};
+      int type = matches(mn, cfg.spawnRoad) || matches(mn, onRoad) ? 1 : matches(mn, bounds) ? 2 : matches(mn, paved) ? 3 : 0;
+      if (!type) continue;
+      const Geometry& g = *m->geometry;
+      const mat4& w = m->matrixWorld;
+      for (size_t i = 0; i + 2 < g.idx.size(); i += 3) {
+        vec3 a = w.point(g.pos[g.idx[i]]), b = w.point(g.pos[g.idx[i + 1]]), c = w.point(g.pos[g.idx[i + 2]]);
+        g_surf.tris.push_back({a.x, a.z, b.x, b.z, c.x, c.z, type});
+      }
+    }
+    g_surf.build();
+  }
+  buildRaceLine(sp + dir * cfg.gridOffset, dir);
+  g_surf = SurfaceMap{};
+  std::printf("[pista] traçado: %zu pontos, %.0f m (%.1f s)\n", line.size(), lineLen, nowS() - t0);
   onProgress(1);
 }
 
@@ -596,6 +668,214 @@ void TrackMap::replaceTrees(const MapCfg& cfg, const std::vector<NodePtr>& meshe
   }
   std::printf("[pista] árvores: %zu de %zu trocadas pelo modelo 3D (até %.0f m da pista), %zu células\n", replaced, total, R,
               treeCells.size());
+}
+
+
+// Traçado como caminho de menor custo numa grade de 1 m sobre o chão pavimentado: asfalto da pista
+// é barato, linha/zebra um pouco mais caro, estacionamento/boxes bem caro, o resto proibido; perto
+// da borda custa mais (o caminho fica no meio e evita vias estreitas). Uma barreira na linha de
+// largada obriga o caminho a dar a volta inteira.
+void TrackMap::buildRaceLine(const vec3& start, const vec3& dir0) {
+  line.clear();
+  lineS.clear();
+  lineHalfW.clear();
+  lineLen = 0;
+  if (g_surf.tris.empty()) return;
+  vec3 dir = normalize(vec3(dir0.x, 0, dir0.z)), right(-dir.z, 0, dir.x);
+  float minX = 1e30f, minZ = 1e30f, maxX = -1e30f, maxZ = -1e30f;
+  for (auto& t : g_surf.tris) {
+    minX = std::min({minX, t.ax, t.bx, t.cx}); maxX = std::max({maxX, t.ax, t.bx, t.cx});
+    minZ = std::min({minZ, t.az, t.bz, t.cz}); maxZ = std::max({maxZ, t.az, t.bz, t.cz});
+  }
+  minX -= 10; minZ -= 10; maxX += 10; maxZ += 10;
+  const float C = 1;
+  int W = (int)((maxX - minX) / C) + 1, H = (int)((maxZ - minZ) / C) + 1;
+  std::vector<uint8_t> type((size_t)W * H, 0);
+  // rasteriza (o tipo de prioridade maior vence: pista 1 > limite 2 > outro pavimento 3)
+  static const int RANK[4] = {0, 3, 2, 1};
+  for (auto& t : g_surf.tris) {
+    int x0 = std::max(0, (int)((std::min({t.ax, t.bx, t.cx}) - minX) / C)), x1 = std::min(W - 1, (int)((std::max({t.ax, t.bx, t.cx}) - minX) / C));
+    int z0 = std::max(0, (int)((std::min({t.az, t.bz, t.cz}) - minZ) / C)), z1 = std::min(H - 1, (int)((std::max({t.az, t.bz, t.cz}) - minZ) / C));
+    for (int z = z0; z <= z1; z++)
+      for (int x = x0; x <= x1; x++) {
+        float px = minX + (x + 0.5f) * C, pz = minZ + (z + 0.5f) * C;
+        float d1 = (px - t.bx) * (t.az - t.bz) - (t.ax - t.bx) * (pz - t.bz);
+        float d2 = (px - t.cx) * (t.bz - t.cz) - (t.bx - t.cx) * (pz - t.cz);
+        float d3 = (px - t.ax) * (t.cz - t.az) - (t.cx - t.ax) * (pz - t.az);
+        bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+        if (neg && pos) continue;
+        uint8_t& c = type[(size_t)z * W + x];
+        if (RANK[t.type] > RANK[c]) c = (uint8_t)t.type;
+      }
+  }
+  // distância até a borda (fora da pista/limite), chanfro em duas passadas
+  std::vector<float> dist((size_t)W * H);
+  // borda = tudo que não é asfalto da pista (linhas brancas e zebras inclusive): o meio fica entre as linhas
+  for (size_t i = 0; i < dist.size(); i++) dist[i] = type[i] == 1 ? 1e9f : 0;
+  auto relax = [&](int x, int z, int dx, int dz, float w) {
+    int nx = x + dx, nz = z + dz;
+    if (nx < 0 || nz < 0 || nx >= W || nz >= H) return;
+    float& d = dist[(size_t)z * W + x];
+    d = std::min(d, dist[(size_t)nz * W + nx] + w);
+  };
+  for (int z = 0; z < H; z++)
+    for (int x = 0; x < W; x++) { relax(x, z, -1, 0, 1); relax(x, z, 0, -1, 1); relax(x, z, -1, -1, 1.414f); relax(x, z, 1, -1, 1.414f); }
+  for (int z = H - 1; z >= 0; z--)
+    for (int x = W - 1; x >= 0; x--) { relax(x, z, 1, 0, 1); relax(x, z, 0, 1, 1); relax(x, z, 1, 1, 1.414f); relax(x, z, -1, 1, 1.414f); }
+  auto cell = [&](const vec3& p, int& x, int& z) {
+    x = (int)((p.x - minX) / C);
+    z = (int)((p.z - minZ) / C);
+    return x >= 0 && z >= 0 && x < W && z < H;
+  };
+  // barreira na largada (faixa transversal de 2 m) para o caminho não voltar direto
+  std::vector<uint8_t> blocked((size_t)W * H, 0);
+  for (float lat = -40; lat <= 40; lat += 0.5f)
+    for (float lon = -1.5f; lon <= 1.5f; lon += 0.5f) {
+      int x, z;
+      if (cell(start + right * lat + dir * lon, x, z)) blocked[(size_t)z * W + x] = 1;
+    }
+  int sx, sz, gx, gz;
+  // começa logo depois da linha e termina logo antes dela (o centro da pista mais próximo)
+  auto snap = [&](vec3 p, int& x, int& z, float side) {
+    if (!cell(p, x, z)) return false;
+    float best = -1;
+    int bx = x, bz = z;
+    for (int dz = -12; dz <= 12; dz++)
+      for (int dx = -12; dx <= 12; dx++) {
+        int nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= W || nz >= H || blocked[(size_t)nz * W + nx]) continue;
+        vec3 cp(minX + (nx + 0.5f) * C, 0, minZ + (nz + 0.5f) * C);
+        if (dot(cp - vec3(start.x, 0, start.z), dir) * side < 2.5f) continue;  // cada um do seu lado da linha
+        float d = dist[(size_t)nz * W + nx];
+        if (type[(size_t)nz * W + nx] == 1 && d > best) { best = d; bx = nx; bz = nz; }
+      }
+    x = bx;
+    z = bz;
+    return best > 0;
+  };
+  if (!snap(start + dir * 5.f, sx, sz, 1) || !snap(start - dir * 5.f, gx, gz, -1)) {
+    std::printf("[pista] traçado: largada fora do asfalto\n");
+    return;
+  }
+  auto stepCost = [&](size_t i) -> float {
+    uint8_t t = type[i];
+    if (t == 0 || blocked[i]) return -1;
+    // cruzar linha/zebra é caro: impede o atalho por áreas de escape asfaltadas (ex.: La Source)
+    float base = t == 1 ? 1.f : t == 2 ? 25.f : 40.f;
+    float d = std::min(dist[i], 8.f);
+    return base * (1 + 12 / ((d + 0.5f) * (d + 0.5f)));
+  };
+  std::vector<float> g((size_t)W * H, 1e30f);
+  std::vector<int> from((size_t)W * H, -1);
+  using QE = std::pair<float, int>;
+  std::priority_queue<QE, std::vector<QE>, std::greater<QE>> pq;
+  int sIdx = sz * W + sx, gIdx = gz * W + gx;
+  g[sIdx] = 0;
+  pq.push({0, sIdx});
+  static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DZ[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+  static const float DW[8] = {1, 1, 1, 1, 1.414f, 1.414f, 1.414f, 1.414f};
+  while (!pq.empty()) {
+    auto [cg, ci] = pq.top();
+    pq.pop();
+    if (cg > g[ci]) continue;
+    if (ci == gIdx) break;
+    int cx = ci % W, cz = ci / W;
+    for (int k = 0; k < 8; k++) {
+      int nx = cx + DX[k], nz = cz + DZ[k];
+      if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+      int ni = nz * W + nx;
+      float sc = stepCost(ni);
+      if (sc < 0) continue;
+      float ng = cg + sc * DW[k] * C;
+      if (ng < g[ni]) { g[ni] = ng; from[ni] = ci; pq.push({ng, ni}); }
+    }
+  }
+  if (from[gIdx] < 0) {
+    std::printf("[pista] traçado: sem caminho fechando a volta\n");
+    return;
+  }
+  // caminho (do começo ao fim), reamostrado a cada 4 m e suavizado
+  std::vector<vec3> raw;
+  for (int i = gIdx; i >= 0; i = from[i]) raw.push_back(vec3(minX + (i % W + 0.5f) * C, 0, minZ + (i / W + 0.5f) * C));
+  std::reverse(raw.begin(), raw.end());
+  raw.insert(raw.begin(), vec3(start.x, 0, start.z));
+  for (int pass = 0; pass < 12; pass++) {
+    std::vector<vec3> sm = raw;
+    for (size_t i = 2; i + 2 < raw.size(); i++) sm[i] = (raw[i - 2] + raw[i - 1] + raw[i] + raw[i + 1] + raw[i + 2]) / 5.f;
+    raw = sm;
+  }
+  float acc = 0, next = 0;
+  float y = start.y;
+  for (size_t i = 0; i + 1 < raw.size(); i++) {
+    float seg = distance(raw[i], raw[i + 1]);
+    while (next <= acc + seg) {
+      vec3 q = raw[i] + (raw[i + 1] - raw[i]) * ((next - acc) / std::max(seg, 1e-4f));
+      auto h = ground.raycast(V3(q.x, y + 8, q.z), V3(0, -1, 0), 30);
+      if (h) y = (float)(y + 8 - h->dist);
+      q.y = y;
+      int x, z;
+      float hw = cell(q, x, z) ? std::min(dist[(size_t)z * W + x], 12.f) : 4.f;
+      line.push_back(q);
+      lineHalfW.push_back(hw);
+      next += 4;
+    }
+    acc += seg;
+  }
+  size_t n = line.size();
+  if (n < 50) { line.clear(); lineHalfW.clear(); return; }
+  if (std::getenv("SR_LINEDUMP")) {
+    FILE* f = std::fopen(std::getenv("SR_LINEDUMP"), "w");
+    for (size_t i = 0; i < n; i++) std::fprintf(f, "%.2f %.2f %.2f %.2f\n", line[i].x, line[i].y, line[i].z, lineHalfW[i]);
+    std::fclose(f);
+  }
+  lineS.resize(n);
+  float s2 = 0;
+  for (size_t i = 0; i < n; i++) {
+    lineS[i] = s2;
+    s2 += distance(line[i], line[(i + 1) % n]);
+  }
+  lineLen = s2;
+}
+
+int TrackMap::nearestOnLine(const vec3& p, int hint, float* sOut) const {
+  int n = (int)line.size();
+  if (!n) return -1;
+  int best = 0;
+  float bd = 1e30f;
+  auto test = [&](int i) {
+    i = ((i % n) + n) % n;
+    vec3 a = line[i], b = line[(i + 1) % n];
+    vec3 ab = b - a;
+    float t = std::clamp(dot(p - a, ab) / std::max(1e-4f, dot(ab, ab)), 0.f, 1.f);
+    vec3 q = a + ab * t;
+    float dd = (p.x - q.x) * (p.x - q.x) + (p.z - q.z) * (p.z - q.z) + 0.2f * (p.y - q.y) * (p.y - q.y);
+    if (dd < bd) {
+      bd = dd;
+      best = i;
+      if (sOut) *sOut = lineS[i] + t * length(ab);
+    }
+  };
+  if (hint < 0) for (int i = 0; i < n; i++) test(i);
+  else for (int k = -40; k <= 40; k++) test(hint + k);
+  return best;
+}
+
+vec3 TrackMap::lineAt(float s) const {
+  int n = (int)line.size();
+  if (!n) return vec3();
+  s = std::fmod(std::fmod(s, lineLen) + lineLen, lineLen);
+  int i = (int)(std::upper_bound(lineS.begin(), lineS.end(), s) - lineS.begin()) - 1;
+  i = std::clamp(i, 0, n - 1);
+  vec3 a = line[i], b = line[(i + 1) % n];
+  float segLen = (i + 1 < n ? lineS[i + 1] : lineLen) - lineS[i];
+  float t = segLen > 1e-4f ? (s - lineS[i]) / segLen : 0;
+  return a + (b - a) * t;
+}
+
+vec3 TrackMap::lineDir(float s) const {
+  vec3 d = lineAt(s + 2) - lineAt(s - 2);
+  d.y = 0;
+  return length(d) > 1e-4f ? normalize(d) : vec3(0, 0, -1);
 }
 
 void TrackMap::updateLod(const vec3& cam) {

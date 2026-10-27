@@ -37,7 +37,7 @@ void Cinematic::start(const CarEntry& entry, const std::shared_ptr<LoadedCar>& l
   maker = entry.maker;
   name = entry.name;
   closing = false;
-  bars.set(1);
+  bars.snap(1);  // a cena já abre com as faixas; elas só recolhem (devagar) ao sair
   hint.delay = 1.2f;
   hint.set(1);
   hintTimer = 0;

@@ -77,7 +77,9 @@ add_executable(space_racer
   src/game/cinematic.cpp
   src/game/settings.cpp
   src/game/track.cpp
-  src/game/maps.cpp)
+  src/game/maps.cpp
+  src/game/workshop.cpp
+  src/game/race.cpp)
 target_include_directories(space_racer PRIVATE src third_party)
 target_link_libraries(space_racer PRIVATE sr_physics SDL3::SDL3)
 if(WIN32)

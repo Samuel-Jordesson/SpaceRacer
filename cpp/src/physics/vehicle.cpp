@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "vehicle.h"
 
 #include <algorithm>
@@ -58,6 +59,7 @@ void Vehicle::reset(const V3& position, double heading) {
   angVel = V3();
   for (Wheel& w : wheels) {
     w.omega = 0;
+    w.steer = 0;
     w.compression = w.x0;
     w.absFactor = 1;
     w.Tbrake = 0;
@@ -78,6 +80,9 @@ void Vehicle::reset(const V3& position, double heading) {
   tcActive = false;
   absActive = false;
   steerAngle = 0;
+  fSteer = fThrottle = fBrake = 0;
+  bodySlip = 0;
+  stabilityActive = false;
   accel = V3();  // aceleração no referencial do carro (para o HUD)
   time = 0;
   overrevBlocked = 0;
@@ -119,9 +124,94 @@ bool Vehicle::shiftDown() {
   return true;
 }
 
+// ------------------------------------------------------------------ entrada (teclado → analógico)
+// Um teclado só diz 0 ou 1. Aqui o 0/1 vira uma rampa (como um volante/pedal de verdade), e a
+// assistência de estabilidade segura a traseira quando ela escapa.
+Controls Vehicle::conditionInput(double dt, const Controls& raw) {
+  Controls c = raw;
+  c.throttle = clamp(raw.throttle, 0, 1);
+  c.brake = clamp(raw.brake, 0, 1);
+  c.steer = clamp(raw.steer, -1, 1);
+
+  // deriva do corpo: ângulo entre onde o carro aponta e para onde ele realmente vai
+  const Mat3 R = quat.toMat3();
+  const double vF = vel.dot(R.col(2) * -1), vL = vel.dot(R.col(0));
+  bodySlip = std::fabs(vF) > 1.0 || std::fabs(vL) > 1.0 ? std::atan2(vL, std::max(std::fabs(vF), 1.0)) : 0;
+  const double spd = vel.length();
+  // Deriva do EIXO TRASEIRO: para onde o eixo traseiro realmente anda em relação ao carro. Vale em qualquer
+  // velocidade: numa curva fechada lenta o corpo "anda de lado" só por geometria, mas o eixo traseiro segue
+  // o rumo do carro (≈ 0°); se ele passa disso, a traseira está escorregando de verdade.
+  // (+ = indo para a direita)
+  const V3 rearVel = vel + angVel.cross(R.mulV(V3(0, 0, b)));
+  const double bodyDyn = std::atan2(rearVel.dot(R.col(0)), std::max(std::fabs(rearVel.dot(R.col(2) * -1)), 1.0));
+
+  stabilityActive = false;
+  stabSteer = 0;
+  stabUser = 1;
+  if (assists.stability && vF > 4.0 && !(raw.handbrake > 0.1)) {
+    // sinal de que a traseira está indo embora: a deriva do corpo ou a deriva dos pneus traseiros
+    // (esta aparece antes), descontando a deriva normal de uma curva no limite
+    const double rad = M_PI / 180;
+    double rearSlip = 0, frontSlip = 0;
+    int nr = 0, nf = 0;
+    for (int i = 0; i < 4; i++) {
+      if (!wheels[i].contact) continue;
+      if (i < 2) { frontSlip += wheels[i].slipAngle; nf++; } else { rearSlip += wheels[i].slipAngle; nr++; }
+    }
+    if (nr) rearSlip /= nr;
+    if (nf) frontSlip /= nf;
+    // Sobresterço de verdade = a traseira escorrega bem mais que a dianteira (ou o corpo vai de lado).
+    // Numa curva rápida normal os dois eixos escorregam parecido: a assistência fica quieta.
+    const double overRear = std::fabs(rearSlip) - std::fabs(frontSlip) - 2.5 * rad;
+    const double overBody = std::fabs(bodyDyn) - 6.0 * rad;
+    const bool rearLead = overRear > overBody;
+    const double slide = rearLead ? rearSlip : bodyDyn;
+    const double ex = std::max(overRear, overBody);
+    if (ex > 0) {
+      stabilityActive = true;
+      // contra-esterço direto no ângulo (convenção: + = esquerda): aponta as rodas para onde o carro escorrega
+      stabSteer = -sign(slide) * std::min(1.8 * ex, 0.6 * spec.steering.maxAngleDeg * rad);
+      // quem já está virando "para dentro" do escorregão deixa de mandar no volante
+      stabUser = clamp(1 - ex / (8 * rad), 0.35, 1.0);
+      // alivia o acelerador enquanto escorrega: o "pé no fundo" do teclado não roda o carro
+      c.throttle *= clamp(1 - ex / (7 * rad), 0.0, 1.0);
+      // e o freio: com as 4 rodas travadas (ABS desligado) o volante não tem efeito nenhum
+      c.brake *= clamp(1 - ex / (5 * rad), 0.15, 1.0);
+    }
+  }
+
+  // freio: com o ABS desligado, travar as rodas da frente com o volante virado tira o esterço do carro
+  // (ele segue reto) e travar tudo faz o corpo ir de lado. Alivia o freio nesses dois casos.
+  if (assists.stability && vF > 4.0 && c.brake > 0.05 && !(raw.handbrake > 0.1)) {
+    const double rad = M_PI / 180;
+    double lockF = 0;
+    for (int i = 0; i < 2; i++) if (wheels[i].contact) lockF = std::max(lockF, -wheels[i].slipRatio);
+    const double steering = clamp(std::fabs(c.steer) * 3, 0.0, 1.0);  // só vale com volante virado
+    const double lockEx = std::max(0.0, lockF - 0.45) * steering;
+    const double slideEx = std::max(0.0, std::fabs(bodyDyn) - 3.0 * rad);
+    c.brake *= clamp(1 - lockEx * 2.2 - slideEx / (6 * rad), 0.15, 1.0);
+  }
+
+  if (!assists.smoothInput) { fSteer = c.steer; fThrottle = c.throttle; fBrake = c.brake; return c; }
+
+  const double sp = clamp(spd / 50.0, 0.0, 1.0);  // 0 parado … 1 a 180 km/h
+  // volante: leva ~0,25 s a fundo em baixa e ~0,6 s em alta; volta ao centro mais rápido
+  const bool returning = std::fabs(c.steer) < std::fabs(fSteer) || c.steer * fSteer < 0;
+  const double sRate = returning ? lerp(8.0, 5.0, sp) : lerp(4.5, 3.0, sp);
+  fSteer += clamp(c.steer - fSteer, -sRate * dt, sRate * dt);
+  // pedais: acelerador ~0,3 s a fundo, freio ~0,2 s
+  fThrottle += clamp(c.throttle - fThrottle, -10.0 * dt, 3.3 * dt);
+  fBrake += clamp(c.brake - fBrake, -15.0 * dt, 5.0 * dt);
+  c.steer = fSteer;
+  c.throttle = fThrottle;
+  c.brake = fBrake;
+  return c;
+}
+
 // ------------------------------------------------------------------ passo de física
-void Vehicle::step(double dt, const Controls& input) {
+void Vehicle::step(double dt, const Controls& rawInput) {
   time += dt;
+  const Controls input = conditionInput(dt, rawInput);
   const Mat3 R = quat.toMat3();
   const V3 up = R.col(1), fwd = R.col(2) * -1;
   V3 force(0, -mass * G, 0);
@@ -133,19 +223,57 @@ void Vehicle::step(double dt, const Controls& input) {
   };
   auto pointVel = [&](const V3& p) { return vel + angVel.cross(p - pos); };
 
-  // ---------------- direção (Ackermann)
-  double maxSteer = spec.steering.maxAngleDeg * M_PI / 180;
-  double delta = -clamp(input.steer, -1, 1) * maxSteer;  // positivo = esquerda
-  steerAngle = delta;
-  double L = geometry.wheelbase, tF = geometry.trackFront;
-  for (Wheel& w : wheels) {
-    if (!w.front) { w.steer = 0; continue; }
-    if (std::fabs(delta) < 1e-5) { w.steer = delta; continue; }
-    double rT = L / std::tan(std::fabs(delta));
-    double inner = std::atan(L / (rT - tF / 2)), outer = std::atan(L / (rT + tF / 2));
-    bool isInner = (delta > 0) == w.left;
-    double ack = isInner ? inner : outer;
-    w.steer = sign(delta) * (std::fabs(delta) + spec.steering.ackermann * (ack - std::fabs(delta)));
+  // ---------------- direção: sensível à velocidade + Ackermann por roda
+  // Convenção: ângulo > 0 = curva para a ESQUERDA (rotação positiva em torno de y), igual ao
+  // sentido que a roda usa em step() (wf = fwd·cos − right·sin). Entrada direita (+) → ângulo < 0.
+  {
+    const double spd0 = vel.length();  // m/s
+    // Em baixa velocidade o esterço é mais generoso (curva fechada, baliza, hairpin): até +40% de ângulo
+    // até ~30 km/h, voltando ao normal por volta de 55 km/h (o limite de aderência abaixo continua valendo). Limitado a 38° na roda.
+    const double lowSpeed = clamp((15.3 - spd0) / (15.3 - 8.3), 0.0, 1.0);
+    const double lockBase = spec.steering.maxAngleDeg * M_PI / 180.0;
+    const double lockLow = std::min(lockBase * (1.0 + 0.40 * lowSpeed), std::max(lockBase, 38.0 * M_PI / 180.0));
+    // Ângulo máximo útil na velocidade atual: o que leva as rodas da frente até o limite de
+    // aderência (ângulo cinemático p/ a aceleração lateral máxima + deriva do pico do pneu).
+    // Girar além disso só faz o carro "plantar" a frente ou rodar.
+    const double vv = std::max(spd0, 1.0);
+    const double aLat = spec.tire.mu * 0.92 * (G + 0.5 * spec.aero.rho * spec.aero.ClA * vv * vv / mass);
+    const double dKin = std::atan(geometry.wheelbase * aLat / (vv * vv));
+    // folga de deriva acima do ângulo cinemático: pequena em baixa velocidade (senão a frente passa do pico do
+    // pneu e "planta"), cheia a partir de ~70 km/h (onde o ângulo útil é pequeno e precisa de autoridade)
+    const double slipAllow = lerp(0.35, 1.15, clamp((vv - 8.3) / (19.5 - 8.3), 0.0, 1.0));
+    const double maxSteer = clamp(dKin + slipAllow * std::atan(tire.tanAPeak), 3.5 * M_PI / 180.0, lockLow);
+
+    const double in = clamp(input.steer, -1.0, 1.0);
+    double target;
+    if (assists.stability) {
+      // modo assistido (opcional): ângulo limitado ao pico de aderência + contra-esterço automático
+      const double shaped = sign(in) * std::pow(std::fabs(in), 1.35);
+      target = clamp(-shaped * maxSteer * stabUser + stabSteer, -lockLow, lockLow);
+    } else {
+      // como num carro de verdade: relação de direção fixa, a roda vai até o batente se o piloto
+      // mandar. Passar do limite do pneu faz a frente escorregar (subesterço) ou o carro rodar.
+      target = -in * lockBase;
+    }
+
+    // velocidade angular do volante limitada (mãos humanas / cremalheira): rápido para virar,
+    // ainda mais rápido para devolver ao centro
+    const double rate = (std::fabs(target) < std::fabs(steerAngle) || target * steerAngle < 0) ? 4.0 : 2.4;  // rad/s
+    steerAngle += clamp(target - steerAngle, -rate * dt, rate * dt);
+
+    // Ackermann: a roda de dentro esterça mais que a de fora. spec.steering.ackermann = 0 (paralelo) .. 1 (puro)
+    const double L = geometry.wheelbase, T = geometry.trackFront;
+    const double ack = clamp(spec.steering.ackermann, 0.0, 1.0);
+    const double ta = std::tan(std::fabs(steerAngle));
+    const double inner = std::atan2(L * ta, L - 0.5 * T * ta);
+    const double outer = std::atan2(L * ta, L + 0.5 * T * ta);
+    const double par = std::fabs(steerAngle);
+    const double dir = sign(steerAngle);
+    for (Wheel& w : wheels) {
+      if (!w.front) { w.steer = 0; continue; }
+      const bool isInner = (steerAngle > 0) == w.left;
+      w.steer = dir * lerp(par, isInner ? inner : outer, ack);
+    }
   }
 
   // ---------------- aerodinâmica
@@ -230,6 +358,22 @@ void Vehicle::step(double dt, const Controls& input) {
     w.slipRatio = kappa; w.slipAngle = std::atan(tanA);
     addForceAt(wf * w.fx + wl * w.fy, P);
   }
+
+#ifdef PHYS_TELEMETRY
+  // telemetria de depuração (compile com -DPHYS_TELEMETRY); 4 vezes por segundo
+  {
+    static double nextTelemetryTime = 0.0;
+    if (time >= nextTelemetryTime) {
+      nextTelemetryTime = time + 0.25;
+      std::printf("\n[PHYSICS] v=%.1f km/h | volante=%.2f graus | yaw=%.1f graus/s\n", vel.length() * 3.6,
+                  steerAngle * 180.0 / M_PI, angVel.y * 180.0 / M_PI);
+      for (const Wheel& w : wheels)
+        std::printf("[%s] contato=%d Fz=%.0f N esterco=%.2f graus slipAngle=%.2f graus slipRatio=%.3f Fx=%.0f Fy=%.0f\n",
+                    w.id.c_str(), w.contact ? 1 : 0, w.fz, w.steer * 180.0 / M_PI, w.slipAngle * 180.0 / M_PI,
+                    w.slipRatio, w.fx, w.fy);
+    }
+  }
+#endif
 
   // ABS: modula pressão por roda para manter κ próximo do pico em frenagem
   absActive = false;

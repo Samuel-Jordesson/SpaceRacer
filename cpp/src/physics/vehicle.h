@@ -127,8 +127,13 @@ class Vehicle {
   double tcCut = 1, tcFront = 1, frontMotorTorque = 0;
   bool tcActive = false, absActive = false;
   double steerAngle = 0, time = 0, overrevBlocked = 0;
+  double fSteer = 0, fThrottle = 0, fBrake = 0;  // entradas filtradas (teclado → analógico)
+  double bodySlip = 0;                            // ângulo de deriva do corpo (rad, + = indo para a direita)
+  bool stabilityActive = false;
+  double stabSteer = 0, stabUser = 1;             // contra-esterço (rad, + = esquerda) e peso da entrada do jogador
 
  private:
+  Controls conditionInput(double dt, const Controls& raw);
   void drivetrain(double dt, const Controls& input, double brake, double handbrake);
   TireOut tireOut;
 };

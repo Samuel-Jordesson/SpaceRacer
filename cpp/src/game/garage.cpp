@@ -323,7 +323,7 @@ void Garage::reclaimCar() {
 
 // distância da câmera: telas estreitas (celular em pé) e carros compridos pedem mais distância
 void Garage::updateDistance() {
-  float dist = baseDist = 7.2f * std::max(1.0f, 1.2f / camera.aspect) * carScale;
+  float dist = baseDist = 8.3f * std::max(1.0f, 1.2f / camera.aspect) * carScale;
   controls.minDistance = dist * 0.72f;
   controls.maxDistance = dist * 1.45f;
   scene.fog.near = dist + 7;
@@ -356,6 +356,19 @@ void Garage::wheel(float dy) { controls.wheel(dy); }
 
 void Garage::render(float dt) {
   camera.update();
+  // na garagem o carro fica à direita do centro (a ficha ocupa a esquerda): desloca a lente,
+  // sem girar a câmera; na cinemática volta ao centro
+  bool cineOn = cine && cine->active;
+  float lensTarget = cineOn ? 0.f : shopView ? 0.07f : 0.17f;
+  lensShift += (lensTarget - lensShift) * (1 - std::exp(-dt * 3));
+  // oficina: afasta o carro (zoom pelo campo de visão) para caber entre a lista e o painel
+  zoomOut += ((shopView && !cineOn ? 1.f : 0.f) - zoomOut) * (1 - std::exp(-dt * 3));
+  if (zoomOut > 0.001f) {
+    float k = 1 + 0.42f * zoomOut;
+    camera.proj(0, 0) /= k;
+    camera.proj(1, 1) /= k;
+  }
+  camera.proj(0, 2) -= lensShift;
   scene.root->updateMatrixWorld();
   renderer.renderShadows(scene);
   // o piso e o anel ficam acima do espelho: somem enquanto o reflexo é renderizado

@@ -1,4 +1,7 @@
+#include <algorithm>
 #include "game.h"
+
+#include "../core/assets.h"
 
 #include <chrono>
 #include <cmath>
@@ -26,7 +29,19 @@ void Game::beginPrepare(const MapEntry& m, int timeOfDay) {
     worldReady = false;
   }
   bool needTrack = !m.flat && !tracks.count(m.id);
-  ready = worldReady && !needTrack;
+  // adversários: outros carros do catálogo (em rodízio); carrega os modelos que ainda não estão na memória
+  oppPlan.clear();
+  std::vector<const CarEntry*> toLoad;
+  if (race.mode == 2 && !m.flat) {
+    std::vector<const CarEntry*> pool;
+    for (auto& e : carCatalog())
+      if (e.id != playerCarId) pool.push_back(&e);
+    if (pool.empty()) for (auto& e : carCatalog()) pool.push_back(&e);
+    for (int i = 0; i < std::clamp(race.opponents, 1, 7); i++) oppPlan.push_back(pool[i % pool.size()]);
+    for (auto* e : oppPlan)
+      if (!oppModels.count(e->id) && std::find(toLoad.begin(), toLoad.end(), e) == toLoad.end()) toLoad.push_back(e);
+  }
+  ready = worldReady && !needTrack && toLoad.empty();
   if (ready) {
     world->setTrack(m.flat ? nullptr : tracks[m.id].get());
     return;
@@ -38,12 +53,20 @@ void Game::beginPrepare(const MapEntry& m, int timeOfDay) {
   prepProgress = 0;
   prepError.clear();
   bool loadWorld = !worldReady;
-  prepThread = std::thread([this, loadWorld, needTrack, &m] {
+  oppLoaded.clear();
+  prepThread = std::thread([this, loadWorld, needTrack, &m, toLoad] {
     try {
-      // céu/asfalto ~30% e pista ~70% da barra
-      float wShare = needTrack ? (loadWorld ? 0.3f : 0.f) : 1.f;
+      // céu/asfalto ~30% e pista ~70% da barra (os carros dos adversários entram no fim)
+      float wShare = needTrack ? (loadWorld ? 0.3f : 0.f) : (toLoad.empty() ? 1.f : 0.3f);
       if (loadWorld) world->loadCPU([this, wShare](float p) { prepProgress = p * wShare; });
-      if (needTrack) loadingTrack->loadCPU(m, [this, wShare](float p) { prepProgress = wShare + p * (1 - wShare) * 0.97f; });
+      float tShare = toLoad.empty() ? 1 - wShare : (1 - wShare) * 0.75f;
+      if (needTrack) loadingTrack->loadCPU(m, [this, wShare, tShare](float p) { prepProgress = wShare + p * tShare * 0.97f; });
+      float base = wShare + (needTrack ? tShare : 0);
+      for (size_t i = 0; i < toLoad.size(); i++) {
+        auto lc = loadCar(assetPath(toLoad[i]->model), toLoad[i]->visual, [](float) {});
+        oppLoaded.emplace_back(toLoad[i]->id, lc);
+        prepProgress = base + (1 - base) * (i + 1) / toLoad.size() * 0.97f;
+      }
     } catch (std::exception& e) {
       prepError = e.what();
     }
@@ -78,6 +101,11 @@ bool Game::pollPrepare(std::string& error) {
     world->scene.root->add(carObj);
     worldReady = true;
   }
+  for (auto& [id, lc] : oppLoaded) {
+    lc->upload();
+    oppModels[id] = lc;
+  }
+  oppLoaded.clear();
   if (loadingTrack) {
     auto t0 = SDL_GetTicks();
     loadingTrack->upload();
@@ -91,13 +119,16 @@ bool Game::pollPrepare(std::string& error) {
 }
 
 void Game::start(const CarEntry& e, const std::shared_ptr<LoadedCar>& l) {
-  const phys::CarSpec& spec = *e.spec;
+  // acerto da oficina: cópia do spec com motor/suspensão ajustados (a HUD guarda referência)
+  tuned = tunedSpec(*e.spec, loadShop(e.id).tune);
+  const phys::CarSpec& spec = tuned;
   entry = &e;
   loaded = l;
   hud = std::make_unique<Hud>(spec);
   ground = world->physicsGround();
   car = std::make_unique<phys::Vehicle>(spec, ground, &loaded->geometry);
   rig.ground = ground;
+  if (settings) car->assists.stability = settings->stabilityAssist;
   {
     // largada da pista (na pista de teste: origem)
     vec3 sp = world->spawnPos();
@@ -137,6 +168,7 @@ void Game::start(const CarEntry& e, const std::shared_ptr<LoadedCar>& l) {
   hud->creditAuthor = a.author;
   hud->creditLicense = a.license;
   hud->creditSource = a.source;
+  raceStart();
 }
 
 void Game::teleport(float x, float z, float heading) {
@@ -160,6 +192,7 @@ void Game::debugPick(float x, float z) {
 }
 
 void Game::stop() {
+  raceStop();
   running = false;
   audio.setPaused(true);
   if (hud) hud->helpOpen = false;
@@ -205,6 +238,8 @@ void Game::applySettings() {
     world->setShadowSoftness(settings->shadowSoft);
   }
   audio.setVolume(settings->volume);
+  input.steerSens = settings->steerSens;
+  if (car) car->assists.stability = settings->stabilityAssist;
 }
 
 void Game::setQuality(int level, bool autoAdj) {
@@ -223,6 +258,13 @@ void Game::setQuality(int level, bool autoAdj) {
 }
 
 void Game::resetCar() {
+  if (raceActive() && !racers.empty()) {
+    // na corrida, volta para o traçado no ponto onde estava
+    placeOnLine(*car, racers[0].s, 0);
+    skids->clear();
+    smoke->clear();
+    return;
+  }
   vec3 f = carObj->quaternion.rotate({0, 0, -1});
   phys::GroundQuery h = ground->heightNear(car->pos.x, car->pos.z, car->pos.y + 3);
   car->reset(phys::V3(car->pos.x, h.h > -1e8 ? h.h : 0, car->pos.z), std::atan2(-f.x, -f.z));
@@ -238,6 +280,13 @@ void Game::handleKeys(const Input::Events& ev) {
     return;
   }
   if (input.take({SDL_SCANCODE_C})) rig.next();
+  if (phase == Phase::Finished && resultsOpen) {
+    if (input.take({SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER})) {
+      if (onExit) onExit();
+      return;
+    }
+    if (input.take({SDL_SCANCODE_SPACE})) resultsOpen = false;
+  }
   if (input.take({SDL_SCANCODE_R})) { resetCar(); hud->flash("Carro reposicionado"); }
   if (input.take({SDL_SCANCODE_M})) {
     car->assists.autoGearbox = !car->assists.autoGearbox;
@@ -333,14 +382,20 @@ void Game::frame(float dt) {
     return;
   }
   if (!paused) {
+    raceUpdate(dt);
     acc += dt;
     phys::Controls controls{input.throttle, input.brake, input.steer, input.handbrake};
+    // semáforo: carro segurado no freio (o acelerador pode encher o giro)
+    if (phase == Phase::Countdown) { controls.brake = 1; controls.handbrake = 1; }
     while (acc >= PHYSICS_DT) {
       car->step(PHYSICS_DT, controls);
+      for (auto& b : bots) b.car->step(PHYSICS_DT, b.ctl);
       acc -= PHYSICS_DT;
     }
+    raceAfterPhysics(dt);
   }
   syncVisuals(dt);
+  syncBots();
   rig.update(dt, *carObj, *visual, *car);
   camera.aspect = (float)winW / std::max(1, winH);
   camera.update();

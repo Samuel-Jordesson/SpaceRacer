@@ -542,5 +542,107 @@ std::shared_ptr<LoadedCar> loadCar(const std::string& path, const VisualCfg& cfg
   car->attribution = gltf;
   car->attribution.scene = nullptr;
   root->updateMatrixWorld();
+
+  // carroceria para a oficina: os materiais de pintura informados ou, sem isso, o de maior área
+  // (fora vidros, pneus e rodas); entram também os que têm pelo menos metade dessa área
+  car->box = worldBox(*root);
+  {
+    std::map<Material*, std::pair<MaterialPtr, double>> area;
+    root->traverse([&](Node& o) {
+      if (!o.isMesh() || matches(o.material->name, cfg.glass) || matches(o.material->name, cfg.tires) ||
+          matches(o.material->name, cfg.splitWheels) || o.material->transparent)
+        return;
+      const Geometry& g = *o.geometry;
+      double a = 0;
+      for (size_t i = 0; i + 2 < g.idx.size(); i += 3) {
+        vec3 p0 = o.matrixWorld.point(g.pos[g.idx[i]]), p1 = o.matrixWorld.point(g.pos[g.idx[i + 1]]),
+             p2 = o.matrixWorld.point(g.pos[g.idx[i + 2]]);
+        a += length(cross(p1 - p0, p2 - p0)) / 2;
+      }
+      auto& e = area[o.material.get()];
+      e.first = o.material;
+      e.second += a;
+    });
+    double best = 0;
+    for (auto& [k, v] : area) best = std::max(best, v.second);
+    for (auto& [k, v] : area) {
+      bool named = !cfg.paint.empty() && matches(k->name, cfg.paint);
+      if (named || (cfg.paint.empty() && v.second >= best * 0.5)) {
+        car->paintMats.push_back(v.first);
+        Material& m = *v.first;
+        car->paintOrig.push_back({m.map, m.color, m.metalness, m.roughness, m.clearcoat, m.clearcoatRoughness});
+      }
+    }
+  }
+  // aros: materiais das peças que giram com cada roda, menos pneu, disco, rodas borradas e brilho
+  {
+    std::set<Material*> skip, seen;
+    for (auto& [id, p] : car->pivots) {
+      for (auto& m : p.glow) skip.insert(m.get());
+      for (auto& m : p.blur) skip.insert(m.get());
+    }
+    for (auto& [id, p] : car->pivots)
+      p.spin->traverse([&](Node& o) {
+        if (!o.isMesh()) return;
+        Material* mt = o.material.get();
+        const std::string& n = mt->name;
+        if (skip.count(mt) || seen.count(mt) || matches(n, cfg.tires) || matches(n, cfg.discs) || matches(n, cfg.rimBlur) ||
+            matches(n, cfg.brakeGlow) || mt->transparent)
+          return;
+        seen.insert(mt);
+        car->rimMats.push_back(o.material);
+        car->rimOrig.push_back({mt->map, mt->color, mt->metalness, mt->roughness, mt->clearcoat, mt->clearcoatRoughness});
+      });
+  }
+  return car;
+}
+
+std::shared_ptr<LoadedCar> cloneCar(const LoadedCar& src) {
+  auto car = std::make_shared<LoadedCar>();
+  std::unordered_map<const Node*, NodePtr> nodes;
+  std::unordered_map<const Material*, MaterialPtr> mats;
+  auto matOf = [&](const MaterialPtr& m) -> MaterialPtr {
+    if (!m) return m;
+    auto& c = mats[m.get()];
+    if (!c) c = std::make_shared<Material>(*m);
+    return c;
+  };
+  std::function<NodePtr(const Node&)> copy = [&](const Node& n) {
+    auto c = makeNode(n.name);
+    c->position = n.position;
+    c->quaternion = n.quaternion;
+    c->scale = n.scale;
+    c->visible = n.visible;
+    c->geometry = n.geometry;
+    c->material = matOf(n.material);
+    c->castShadow = n.castShadow;
+    c->receiveShadow = n.receiveShadow;
+    c->noShadow = n.noShadow;
+    c->renderOrder = n.renderOrder;
+    nodes[&n] = c;
+    for (auto& ch : n.children) c->add(copy(*ch));
+    return c;
+  };
+  car->root = copy(*src.root);
+  auto nodeOf = [&](const NodePtr& n) { return n ? nodes[n.get()] : NodePtr(); };
+  car->geometry = src.geometry;
+  for (auto& [id, p] : src.pivots) {
+    WheelPivot q = p;
+    q.steer = nodeOf(p.steer);
+    q.spin = nodeOf(p.spin);
+    for (auto& m : q.glow) m = matOf(m);
+    for (auto& m : q.blur) m = matOf(m);
+    car->pivots[id] = q;
+  }
+  for (auto& m : src.tailLights) car->tailLights.push_back(matOf(m));
+  if (src.steeringWheel) car->steeringWheel = LoadedCar::SteeringWheel{nodeOf(src.steeringWheel->pivot), src.steeringWheel->axis};
+  car->cockpit = src.cockpit;
+  car->hoodEye = src.hoodEye;
+  for (auto& m : src.paintMats) car->paintMats.push_back(matOf(m));
+  car->paintOrig = src.paintOrig;
+  for (auto& m : src.rimMats) car->rimMats.push_back(matOf(m));
+  car->rimOrig = src.rimOrig;
+  car->box = src.box;
+  for (auto& m : car->paintMats) m->decals = nullptr;
   return car;
 }

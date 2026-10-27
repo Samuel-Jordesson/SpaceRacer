@@ -94,7 +94,7 @@ Input::Events Input::update(float dt, float speedKmh) {
       brake = brk;
       handbrake = a > 0.5f ? 1 : 0;
       // curva de sensibilidade não-linear para precisão perto do centro
-      steer = (steerAx > 0 ? 1 : steerAx < 0 ? -1 : 0) * std::pow(std::fabs(steerAx), 1.4f);
+      steer = (steerAx > 0 ? 1 : steerAx < 0 ? -1 : 0) * std::pow(std::fabs(steerAx), 1.4f) * steerLimit(speedKmh);
     }
   }
 
@@ -104,9 +104,9 @@ Input::Events Input::update(float dt, float speedKmh) {
     throttle = ramp(throttle, kbThrottle, dt, 6.5f, 12);
     brake = ramp(brake, kbBrake, dt, 8, 12);
     handbrake = has({SDL_SCANCODE_SPACE}) ? 1 : 0;
-    // direção: teclado é digital, então limita o esterço com a velocidade
-    float limit = 1 / (1 + std::pow(std::max(0.f, speedKmh) / 85, 1.6f) * 1.5f);
-    float target = kbSteer * limit;
+    // direção: o teclado é digital; a rampa faz o papel das mãos e a sensibilidade (configurável)
+    // reduz o ângulo máximo com a velocidade
+    float target = kbSteer * steerLimit(speedKmh);
     float sgnK = kbSteer > 0 ? 1.f : kbSteer < 0 ? -1.f : 0.f, sgnS = steer > 0 ? 1.f : steer < 0 ? -1.f : 0.f;
     float rate = (kbSteer == 0 || sgnK != sgnS) ? 4.5f : 2.2f;
     steer += (float)clamp(target - steer, -rate * dt, rate * dt);
